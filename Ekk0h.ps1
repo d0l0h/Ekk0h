@@ -424,7 +424,7 @@ $VideoExt = '\.(mp4|webm|gif|mkv|mov|avi)$'
 $SettingsPath = Join-Path $PSScriptRoot "settings.json"
 
 # version shown in Settings > About, and the GitHub "owner/repo" the update check looks at
-$script:AppVersion = '1.0.0'
+$script:AppVersion = '1.0.1'
 $script:UpdateRepo = 'd0l0h/Ekk0h'
 $script:nowPlaying = $null
 $script:storeLively = $null
@@ -8325,7 +8325,7 @@ function Show-AboutDialog {
     $dlg.Font = New-Object System.Drawing.Font("Segoe UI", 10)
     if ($script:appIcon) { $dlg.Icon = $script:appIcon }
     $dlg.Add_HandleCreated({ param($s, $e) Set-TitleBar $s.Handle })
-    $dlg.ClientSize = New-Object System.Drawing.Size(460, 400)
+    $dlg.ClientSize = New-Object System.Drawing.Size(460, 436)
 
     $t = New-Label "EKK0H // WALLPAPER STUDIO" 24 14 420 28 $false 13
     $t.Font = Get-RetroFont 13 'Bold, Italic'
@@ -8358,10 +8358,10 @@ function Show-AboutDialog {
     $btnExp = New-Btn "Export settings..." 24 224 170 'normal' 30
     $btnImp = New-Btn "Import settings..." 202 224 170 'normal' 30
     $btnExp.Font = Get-RetroFont 8; $btnImp.Font = Get-RetroFont 8
-    $lblBk = New-Label "Saves your options, schedule, favorites and tags to one file (not the pictures)." 24 260 412 40 $true 9
+    $lblBk = New-Label "Saves your options, schedule, favorites and tags to one file (not the pictures)." 24 260 412 52 $true 9
     $dlg.Controls.Add($btnExp); $dlg.Controls.Add($btnImp); $dlg.Controls.Add($lblBk)
-    $dlg.Controls.Add((New-Heading "Setup" 24 300 300))
-    $btnWiz = New-Btn "Run setup again..." 24 328 170 'normal' 30
+    $dlg.Controls.Add((New-Heading "Setup" 24 318 300))
+    $btnWiz = New-Btn "Run setup again..." 24 346 170 'normal' 30
     $btnWiz.Font = Get-RetroFont 8
     $dlg.Controls.Add($btnWiz)
     $btnWiz.Add_Click({ Show-SetupWizard })
@@ -8392,6 +8392,100 @@ function Show-AboutDialog {
     $dlg.AcceptButton = $ok; $dlg.CancelButton = $ok
     [void]$dlg.ShowDialog($script:form)
     $dlg.Dispose()
+}
+
+function Add-WheelHook($c, $wheel) {
+    try { $c.Add_MouseWheel($wheel) } catch { }
+    foreach ($k in $c.Controls) { Add-WheelHook $k $wheel }
+}
+
+function Get-SetScrollThumb($sc) {
+    $th = [int][math]::Max(34, $sc.ViewH * $sc.ViewH / ($sc.ViewH + $sc.Range))
+    $ty = [int](($sc.ViewH - $th) * $sc.Off / $sc.Range)
+    return @{ Y = $ty; H = $th }
+}
+
+function Set-SetScroll($sc, [double]$v) {
+    $v = [int][math]::Max(0, [math]::Min($sc.Range, $v))
+    $sc.Off = $v
+    $sc.Dlg.Top = $sc.Base - $v
+    $sc.Bar.Invalidate()
+}
+
+# The whole tab (both columns) scrolls together with a bar drawn in the theme instead of the system bar.
+function Add-SettingsScroll($parent, $dlg, [int]$baseTop) {
+    $parent.AutoScroll = $false
+    $viewH = [int]$parent.Height
+    $kids = @(); foreach ($k in $parent.Controls) { $kids += $k }
+    $contentH = $viewH
+    foreach ($k in $kids) { if ($k.Bottom + 10 -gt $contentH) { $contentH = $k.Bottom + 10 } }
+    $range = [int]($contentH - $viewH)
+    if ($range -le 0) { return }
+    $inner = New-Object System.Windows.Forms.Panel
+    $inner.Location = New-Object System.Drawing.Point(0, 0)
+    $inner.Size = New-Object System.Drawing.Size($parent.Width, $contentH)
+    $inner.BackColor = $script:cBg
+    foreach ($k in $kids) { $inner.Controls.Add($k) }
+    $parent.Controls.Add($inner)
+    $bar = New-Object System.Windows.Forms.Panel
+    $bar.Location = New-Object System.Drawing.Point(($parent.Width - 14), 0)
+    $bar.Size = New-Object System.Drawing.Size(12, $viewH)
+    $bar.BackColor = $script:cBg
+    $bar.Cursor = 'Hand'
+    Set-DoubleBuffered $bar
+    $parent.Controls.Add($bar)
+    $bar.BringToFront()
+    $sc = @{ Off = 0; Range = $range; Drag = $false; DragY = 0; DragOff = 0; Hover = $false; ViewH = $viewH; Base = 0; Dlg = $inner; Bar = $bar }
+    $bar.Tag = $sc
+    $script:setScroll = $sc
+    $bar.Add_Paint({
+        param($s, $e)
+        $sc = $s.Tag
+        $g = $e.Graphics
+        $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+        $g.Clear($script:cBg)
+        $cx = $s.Width / 2.0
+        $tr = New-Object System.Drawing.RectangleF([single]($cx - 2), 4, [single]4, [single]($s.Height - 8))
+        $tp = New-RoundPath $tr 2
+        $tb = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(110, $script:cTrack))
+        $g.FillPath($tb, $tp); $tb.Dispose(); $tp.Dispose()
+        $t = Get-SetScrollThumb $sc
+        $w = [single]6
+        if ($sc.Hover -or $sc.Drag) { $w = [single]8 }
+        $rect = New-Object System.Drawing.RectangleF([single]($cx - $w / 2), [single]($t.Y + 1), $w, [single]([math]::Max(8, $t.H - 2)))
+        $path = New-RoundPath $rect 3
+        $c1 = $script:cAccent; $c2 = $script:cPurple
+        if ($sc.Drag) { $c1 = $script:cAccentHover; $c2 = $script:cCyan }
+        $gb = New-Object System.Drawing.Drawing2D.LinearGradientBrush($rect, $c1, $c2, [single]90)
+        $g.FillPath($gb, $path); $gb.Dispose(); $path.Dispose()
+    })
+    $bar.Add_MouseEnter({ param($s, $e) $s.Tag.Hover = $true; $s.Invalidate() })
+    $bar.Add_MouseLeave({ param($s, $e) $s.Tag.Hover = $false; $s.Invalidate() })
+    $bar.Add_MouseDown({
+        param($s, $e)
+        $sc = $s.Tag
+        $t = Get-SetScrollThumb $sc
+        if ($e.Y -ge $t.Y -and $e.Y -le ($t.Y + $t.H)) { $sc.Drag = $true; $sc.DragY = $e.Y; $sc.DragOff = $sc.Off }
+        elseif ($e.Y -lt $t.Y) { Set-SetScroll $sc ($sc.Off - 120) }
+        else { Set-SetScroll $sc ($sc.Off + 120) }
+        $s.Invalidate()
+    })
+    $bar.Add_MouseMove({
+        param($s, $e)
+        $sc = $s.Tag
+        if (-not $sc.Drag) { return }
+        $t = Get-SetScrollThumb $sc
+        $track = [math]::Max(1, $sc.ViewH - $t.H)
+        Set-SetScroll $sc ($sc.DragOff + ($e.Y - $sc.DragY) * $sc.Range / $track)
+    })
+    $bar.Add_MouseUp({ param($s, $e) $s.Tag.Drag = $false; $s.Invalidate() })
+    $wheel = { param($s, $e) $sc = $script:setScroll; if ($sc) { Set-SetScroll $sc ($sc.Off - [int]($e.Delta / 120) * 48) } }
+    Add-WheelHook $inner $wheel
+    $bar.Add_MouseWheel($wheel)
+    $parent.Add_MouseWheel($wheel)
+    try { $inner.GetType().GetMethod('SetStyle', [Reflection.BindingFlags]'Instance,NonPublic').Invoke($inner, @([System.Windows.Forms.ControlStyles]::Selectable, $true)) } catch { }
+    $inner.TabStop = $true
+    $inner.Add_MouseEnter({ try { if (-not ($script:form.ActiveControl -is [System.Windows.Forms.TextBoxBase])) { [void]$script:setScroll.Dlg.Focus() } } catch { } })
 }
 
 function Build-SettingsContent($parent) {
@@ -8519,6 +8613,8 @@ function Build-SettingsContent($parent) {
     $btnAbout.Font = Get-RetroFont 8
     $btnAbout.Add_Click({ Show-AboutDialog })
     $dlg.Controls.Add($btnAbout)
+
+    Add-SettingsScroll $parent $dlg -14
 }
 
 # gear in the header: opens (or closes) the Settings page
@@ -8534,14 +8630,16 @@ function New-WizCard([int]$x, [int]$y, [int]$w, [int]$h, [string]$kind, [string]
     $p.Location = New-Object System.Drawing.Point($x, $y)
     $p.Size = New-Object System.Drawing.Size($w, $h)
     $p.BackColor = $script:cBg
+    $p.Tag = @{ Kind = $kind; Title = $title; Text = $text }
     Set-DoubleBuffered $p
     $p.Add_Paint({
         param($s, $e)
+        $kind = [string]$s.Tag.Kind; $title = [string]$s.Tag.Title; $text = [string]$s.Tag.Text
         $g = $e.Graphics
         $g.SmoothingMode = 'AntiAlias'; $g.TextRenderingHint = 'ClearTypeGridFit'
         $rc = New-Object System.Drawing.RectangleF(1, 1, ($s.Width - 3), ($s.Height - 3))
         $path = New-RoundPath $rc 10
-        $b1 = New-Object System.Drawing.Drawing2D.LinearGradientBrush((New-Object System.Drawing.Rectangle(0, 0, $s.Width, $s.Height)), $script:cPanel2, $script:cPanel, 90)
+        $b1 = New-Object System.Drawing.Drawing2D.LinearGradientBrush((New-Object System.Drawing.Rectangle(0, 0, $s.Width, $s.Height)), $script:cPanel2, $script:cPanel, [single]90)
         $g.FillPath($b1, $path); $b1.Dispose()
         $pen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(150, $script:cCyan), 1.5)
         $g.DrawPath($pen, $path); $pen.Dispose(); $path.Dispose()
@@ -8566,19 +8664,21 @@ function New-WizCard([int]$x, [int]$y, [int]$w, [int]$h, [string]$kind, [string]
         $g.DrawString($title, (Get-RetroFont 11), $tb, (New-Object System.Drawing.RectangleF(8, 78, ($s.Width - 16), 24)), $sf)
         $g.DrawString($text, (New-Object System.Drawing.Font("Segoe UI", 9)), $db, (New-Object System.Drawing.RectangleF(12, 106, ($s.Width - 24), 70)), $sf)
         $tb.Dispose(); $db.Dispose(); $sf.Dispose()
-    }.GetNewClosure())
+    })
     return $p
 }
 
-function New-ThemeTile([string]$name, [int]$x, [int]$y, [int]$w, [int]$h, [scriptblock]$pick) {
+function New-ThemeTile([string]$name, [int]$x, [int]$y, [int]$w, [int]$h) {
     $p = New-Object System.Windows.Forms.Panel
     $p.Location = New-Object System.Drawing.Point($x, $y)
     $p.Size = New-Object System.Drawing.Size($w, $h)
     $p.BackColor = $script:cBg
     $p.Cursor = [System.Windows.Forms.Cursors]::Hand
+    $p.Tag = @{ Name = $name }
     Set-DoubleBuffered $p
     $p.Add_Paint({
         param($s, $e)
+        $name = [string]$s.Tag.Name
         $g = $e.Graphics
         $g.SmoothingMode = 'AntiAlias'; $g.TextRenderingHint = 'ClearTypeGridFit'
         $t = $script:Themes[$name]
@@ -8591,7 +8691,7 @@ function New-ThemeTile([string]$name, [int]$x, [int]$y, [int]$w, [int]$h, [scrip
         }
         $rc = New-Object System.Drawing.RectangleF(2, 2, ($s.Width - 5), ($s.Height - 5))
         $path = New-RoundPath $rc 8
-        $gb = New-Object System.Drawing.Drawing2D.LinearGradientBrush((New-Object System.Drawing.Rectangle(0, 0, $s.Width, $s.Height)), $c1, $c2, 0)
+        $gb = New-Object System.Drawing.Drawing2D.LinearGradientBrush((New-Object System.Drawing.Rectangle(0, 0, $s.Width, $s.Height)), $c1, $c2, [single]0)
         $g.FillPath($gb, $path); $gb.Dispose()
         $sel = ($script:themeName -eq $name)
         $pen = New-Object System.Drawing.Pen($(if ($sel) { $script:cAccent } else { [System.Drawing.Color]::FromArgb(110, $script:cDim) }), $(if ($sel) { 3 } else { 1 }))
@@ -8603,9 +8703,40 @@ function New-ThemeTile([string]$name, [int]$x, [int]$y, [int]$w, [int]$h, [scrip
         $tb = New-Object System.Drawing.SolidBrush($tx)
         $g.DrawString($name, (New-Object System.Drawing.Font("Segoe UI Semibold", 9)), $tb, 9, ($s.Height - 24))
         $tb.Dispose()
-    }.GetNewClosure())
-    $p.Add_Click($pick.GetNewClosure())
+    })
+    $p.Add_Click({ param($s, $e) Invoke-WizPick ([string]$s.Tag.Name) })
     return $p
+}
+
+function Update-WizPage {
+    $w = $script:wiz
+    for ($i = 0; $i -lt $w.Pages.Count; $i++) { $w.Pages[$i].Visible = ($i -eq $w.Idx) }
+    $w.Banner.Invalidate()
+    $w.Back.Enabled = ($w.Idx -gt 0)
+    $w.Skip.Visible = ($w.Idx -lt ($w.Pages.Count - 1))
+    $w.Next.Text = $(if ($w.Idx -eq ($w.Pages.Count - 1)) { "Finish" } else { "Next" })
+}
+
+function Invoke-WizPick([string]$nm) {
+    try {
+        $w = $script:wiz
+        $old = Get-PaletteMap
+        $script:cmbTheme.SelectedItem = $nm
+        $w.Dlg.BackColor = $script:cBg; $w.Dlg.ForeColor = $script:cText
+        Update-ControlColors $w.Dlg $old
+        $w.Banner.Invalidate()
+        foreach ($tl in $w.Tiles) { $tl.Invalidate() }
+        Set-TitleBar $w.Dlg.Handle
+    } catch { }
+}
+
+function Complete-Wizard {
+    $w = $script:wiz
+    # carry the choices over to the main window's own options (they save themselves)
+    try { if ([bool]$script:chkStartWin.Checked -ne [bool]$w.Start.Checked) { $script:chkStartWin.Checked = $w.Start.Checked } } catch { }
+    try { if ([bool]$script:chkHot.Checked -ne [bool]$w.Hot.Checked) { $script:chkHot.Checked = $w.Hot.Checked } } catch { }
+    try { if ([bool]$script:chkLoadScr.Checked -ne [bool]$w.Load.Checked) { $script:chkLoadScr.Checked = $w.Load.Checked } } catch { }
+    $w.Dlg.Close()
 }
 
 function Show-SetupWizard {
@@ -8623,19 +8754,20 @@ function Show-SetupWizard {
     $dlg.Add_HandleCreated({ param($s, $e) Set-TitleBar $s.Handle })
     $dlg.ClientSize = New-Object System.Drawing.Size(560, 436)
 
-    $wz = @{ idx = 0 }
     $titles = @('Welcome', 'Pick a look', 'Optional add-ons', 'Startup', 'All set')
     $banner = New-Object System.Windows.Forms.Panel
     $banner.Location = New-Object System.Drawing.Point(0, 0)
     $banner.Size = New-Object System.Drawing.Size(560, 84)
     $banner.BackColor = $script:cPanel
+    $banner.Tag = $titles
     Set-DoubleBuffered $banner
     $banner.Add_Paint({
         param($s, $e)
+        $titles = $s.Tag; $wz = $script:wiz
         $g = $e.Graphics
         $g.SmoothingMode = 'AntiAlias'; $g.TextRenderingHint = 'AntiAliasGridFit'
         $r = New-Object System.Drawing.Rectangle(0, 0, $s.Width, $s.Height)
-        $gb = New-Object System.Drawing.Drawing2D.LinearGradientBrush($r, $script:cPanel2, $script:cBg, 0)
+        $gb = New-Object System.Drawing.Drawing2D.LinearGradientBrush($r, $script:cPanel2, $script:cBg, [single]0)
         $g.FillRectangle($gb, $r); $gb.Dispose()
         $sp = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(22, $script:cAccent), 8)
         for ($i = -2; $i -lt 12; $i++) { $g.DrawLine($sp, ($i * 60 + 200), $s.Height, ($i * 60 + 260), 0) }
@@ -8648,15 +8780,15 @@ function Show-SetupWizard {
         $db = New-Object System.Drawing.SolidBrush($script:cDim); $tb = New-Object System.Drawing.SolidBrush($script:cText)
         $g.DrawString("WALLPAPER STUDIO  /  SETUP", (Get-RetroFont 8), $db, 26, 50)
         $sf = New-Object System.Drawing.StringFormat; $sf.Alignment = 'Far'
-        $g.DrawString($titles[$wz.idx], (Get-RetroFont 14 'Bold, Italic'), $tb, (New-Object System.Drawing.RectangleF(300, 16, 238, 30)), $sf)
+        $g.DrawString($titles[$wz.Idx], (Get-RetroFont 14 'Bold, Italic'), $tb, (New-Object System.Drawing.RectangleF(300, 16, 238, 30)), $sf)
         $db.Dispose(); $tb.Dispose(); $sf.Dispose()
         for ($i = 0; $i -lt $titles.Count; $i++) {
             $dx = 538 - ($titles.Count - 1 - $i) * 22
-            if ($i -le $wz.idx) { $br = New-Object System.Drawing.SolidBrush($script:cAccent) } else { $br = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(110, $script:cDim)) }
+            if ($i -le $wz.Idx) { $br = New-Object System.Drawing.SolidBrush($script:cAccent) } else { $br = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(110, $script:cDim)) }
             $g.FillEllipse($br, ($dx - 14), 56, 12, 12); $br.Dispose()
         }
         $lp = New-Object System.Drawing.Pen($script:cAccent, 3); $g.DrawLine($lp, 0, 82, $s.Width, 82); $lp.Dispose()
-    }.GetNewClosure())
+    })
     $dlg.Controls.Add($banner)
     $pages = @()
     for ($i = 0; $i -lt $titles.Count; $i++) {
@@ -8679,22 +8811,9 @@ function Show-SetupWizard {
     # 2: theme (click a tile; the whole window re-colors)
     $pages[1].Controls.Add((New-Label "Click a look. You can change it any time from the picker in the bottom-right corner." 24 6 512 24 $true 9))
     $tiles = New-Object System.Collections.ArrayList
-    $pick = {
-        param($s, $e)
-        try {
-            $nm = [string]$s.Tag
-            $old = Get-PaletteMap
-            $script:cmbTheme.SelectedItem = $nm
-            $dlg.BackColor = $script:cBg; $dlg.ForeColor = $script:cText
-            Update-ControlColors $dlg $old
-            $banner.Invalidate(); foreach ($tl in $tiles) { $tl.Invalidate() }
-            Set-TitleBar $dlg.Handle
-        } catch { }
-    }.GetNewClosure()
-        $ti = 0
+    $ti = 0
     foreach ($tn in $script:ThemeNames) {
-        $tl = New-ThemeTile $tn (24 + ($ti % 4) * 129) (36 + [math]::Floor($ti / 4) * 54) 123 48 $pick
-        $tl.Tag = $tn
+        $tl = New-ThemeTile $tn (24 + ($ti % 4) * 129) (36 + [math]::Floor($ti / 4) * 54) 123 48
         $pages[1].Controls.Add($tl); [void]$tiles.Add($tl)
         $ti++
     }
@@ -8724,29 +8843,25 @@ function Show-SetupWizard {
     $btnNext = New-Btn "Next" 436 388 100 'primary' 32
     foreach ($b in @($btnBack, $btnSkip, $btnNext)) { $b.Font = Get-RetroFont 9; $dlg.Controls.Add($b) }
 
-    $show = {
-        for ($i = 0; $i -lt $pages.Count; $i++) { $pages[$i].Visible = ($i -eq $wz.idx) }
-        $banner.Invalidate()
-        $btnBack.Enabled = ($wz.idx -gt 0)
-        $btnSkip.Visible = ($wz.idx -lt ($pages.Count - 1))
-        $btnNext.Text = $(if ($wz.idx -eq ($pages.Count - 1)) { "Finish" } else { "Next" })
-    }.GetNewClosure()
-    $btnBack.Add_Click({ if ($wz.idx -gt 0) { $wz.idx--; & $show } }.GetNewClosure())
-    $btnSkip.Add_Click({ $dlg.Close() }.GetNewClosure())
+    $script:wiz = @{
+        Idx = 0; Titles = $titles; Dlg = $dlg; Banner = $banner; Pages = $pages; Tiles = $tiles
+        Back = $btnBack; Skip = $btnSkip; Next = $btnNext; Start = $wzStart; Hot = $wzHot; Load = $wzLoad
+        SavedRows = $savedRows; SavedTip = $savedTip
+    }
+    $btnBack.Add_Click({ $w = $script:wiz; if ($w.Idx -gt 0) { $w.Idx--; Update-WizPage } })
+    $btnSkip.Add_Click({ $script:wiz.Dlg.Close() })
     $btnNext.Add_Click({
-        if ($wz.idx -lt ($pages.Count - 1)) { $wz.idx++; & $show; return }
-        # finish: carry the choices over to the main window's own options (they save themselves)
-        try { if ([bool]$script:chkStartWin.Checked -ne [bool]$wzStart.Checked) { $script:chkStartWin.Checked = $wzStart.Checked } } catch { }
-        try { if ([bool]$script:chkHot.Checked -ne [bool]$wzHot.Checked) { $script:chkHot.Checked = $wzHot.Checked } } catch { }
-        try { if ([bool]$script:chkLoadScr.Checked -ne [bool]$wzLoad.Checked) { $script:chkLoadScr.Checked = $wzLoad.Checked } } catch { }
-        $dlg.Close()
-    }.GetNewClosure())
+        $w = $script:wiz
+        if ($w.Idx -lt ($w.Pages.Count - 1)) { $w.Idx++; Update-WizPage; return }
+        Complete-Wizard
+    })
     $dlg.Add_FormClosed({
+        $w = $script:wiz
         Save-Setting 'WizardDone' '1'
-        $script:addonRows = $savedRows; $script:addonTip = $savedTip
+        $script:addonRows = $w.SavedRows; $script:addonTip = $w.SavedTip
         try { Clear-AddonCache; foreach ($r in @($script:addonRows)) { Update-AddonRow $r }; Update-AddonVisibility } catch { }
-    }.GetNewClosure())
-    & $show
+    })
+    Update-WizPage
     [void]$dlg.ShowDialog($script:form)
 }
 
@@ -10510,7 +10625,7 @@ $script:numSchedH = @(); $script:cmbSchedP = @()
 $defH = @(6, 10, 17, 22)
 $ss = Get-Settings
 for ($i = 0; $i -lt 4; $i++) {
-    $y = 46 + $i * 28
+    $y = 52 + $i * 27
     $lb = New-Label $script:schedNames[$i] 490 ($y + 3) 74 24 $false 10
     $lb.Font = Get-RetroFont 10
     $pnlSched.Controls.Add($lb)
