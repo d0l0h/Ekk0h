@@ -424,7 +424,7 @@ $VideoExt = '\.(mp4|webm|gif|mkv|mov|avi)$'
 $SettingsPath = Join-Path $PSScriptRoot "settings.json"
 
 # version shown in Settings > About, and the GitHub "owner/repo" the update check looks at
-$script:AppVersion = '1.0.1'
+$script:AppVersion = '1.1.0'
 $script:UpdateRepo = 'd0l0h/Ekk0h'
 $script:nowPlaying = $null
 $script:storeLively = $null
