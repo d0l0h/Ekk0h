@@ -12,6 +12,7 @@ if not exist "%CSC%" (
     exit /b 1
 )
 
+for %%i in ("%CSC%") do set "WPFDIR=%%~dpiWPF"
 set "SMA="
 for /f "delims=" %%i in ('dir /b /s "%windir%\Microsoft.NET\assembly\GAC_MSIL\System.Management.Automation\System.Management.Automation.dll" 2^>nul') do set "SMA=%%i"
 if not defined SMA for /f "delims=" %%i in ('dir /b /s "%windir%\assembly\GAC_MSIL\System.Management.Automation\System.Management.Automation.dll" 2^>nul') do set "SMA=%%i"
@@ -25,7 +26,7 @@ if not defined SMA (
 set "ICON="
 if exist "ControlCenter.ico" set "ICON=/win32icon:ControlCenter.ico"
 
-"%CSC%" /nologo /target:winexe /platform:anycpu /optimize+ /out:Ekk0h.scr %ICON% /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:System.Web.Extensions.dll ScreenSaver.cs ThemeSaver.cs
+"%CSC%" /nologo /target:winexe /platform:anycpu /optimize+ /out:Ekk0h.scr %ICON% /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /lib:"%WPFDIR%" /reference:System.Web.Extensions.dll /reference:WindowsFormsIntegration.dll /reference:PresentationCore.dll /reference:PresentationFramework.dll /reference:WindowsBase.dll /reference:System.Xaml.dll ScreenSaver.cs ThemeSaver.cs WpfView.cs
 if errorlevel 1 (
     echo.
     echo The screen saver failed to build. See the messages above.

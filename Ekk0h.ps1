@@ -548,7 +548,7 @@ function New-Thumb([string]$path, [int]$w, [int]$h) {
 # Small settings file (settings.json next to this script): Lively location, last
 # "Play on" target and sound level.
 function Get-Settings {
-    $s = @{ LivelyPath = ""; AnimTarget = "All monitors"; AnimSound = "Muted"; UpModel = "Auto soft"; UpMix = "60%"; UpGrain = "Light"; PhysMatch = "1"; DispAlignMode = "Auto" }
+    $s = @{ LivelyPath = ""; AnimTarget = "All Monitors"; AnimSound = "Muted"; UpModel = "Auto Soft"; UpMix = "60%"; UpGrain = "Light"; PhysMatch = "1"; DispAlignMode = "Auto" }
     try {
         if (Test-Path -LiteralPath $SettingsPath) {
             $j = Get-Content -LiteralPath $SettingsPath -Raw | ConvertFrom-Json
@@ -937,7 +937,7 @@ function Start-Animated([string]$file, [string]$target) {
 
 function Get-AnimTarget {
     if ($script:cmbMon -and $script:cmbMon.SelectedItem) { return [string]$script:cmbMon.SelectedItem }
-    return "All monitors"
+    return "All Monitors"
 }
 
 function Add-AnimFiles([string[]]$paths) {
@@ -1824,6 +1824,25 @@ function Write-GroupAI([string]$exe, [string]$srcFile, $sub, $g, [string]$dir) {
     }
 }
 
+# A turned copy of a source picture (90 / 180 / 270 degrees), used while a pack is cut.
+function New-RotatedCopy([string]$path, [int]$deg) {
+    try {
+        $ld = Read-ImageFromFile $path
+        try {
+            $bmp = New-Object System.Drawing.Bitmap($ld.Image)
+            switch ($deg) {
+                90  { $bmp.RotateFlip([System.Drawing.RotateFlipType]::Rotate90FlipNone) }
+                180 { $bmp.RotateFlip([System.Drawing.RotateFlipType]::Rotate180FlipNone) }
+                270 { $bmp.RotateFlip([System.Drawing.RotateFlipType]::Rotate270FlipNone) }
+            }
+            $out = Join-Path ([IO.Path]::GetTempPath()) ("ekk0h_turn_" + [guid]::NewGuid().ToString("N") + ".png")
+            $bmp.Save($out, [System.Drawing.Imaging.ImageFormat]::Png)
+            $bmp.Dispose()
+            return $out
+        } finally { $ld.Image.Dispose(); $ld.Stream.Dispose() }
+    } catch { return $null }
+}
+
 # Writes every screen's picture for a pack from its recipe. Screens in a group without a picture go black.
 function Render-Recipe([string]$dir, $groups, [string]$exe) {
     $lay = Get-PhysicalLayout
@@ -1850,7 +1869,11 @@ function Render-Recipe([string]$dir, $groups, [string]$exe) {
             continue
         }
         $f = Join-Path (Join-Path $dir "_source") $g.source
-        if ($g.up -and $exe) { Write-GroupAI $exe $f $sub $g $dir } else { Write-GroupNative $f $sub $g $dir }
+        $tmpRot = $null
+        if ([int]$g.rot -ne 0) { $tmpRot = New-RotatedCopy $f ([int]$g.rot); if ($tmpRot) { $f = $tmpRot } }
+        try {
+            if ($g.up -and $exe) { Write-GroupAI $exe $f $sub $g $dir } else { Write-GroupNative $f $sub $g $dir }
+        } finally { if ($tmpRot) { Remove-Item -LiteralPath $tmpRot -Force -ErrorAction SilentlyContinue } }
     }
     if ($blendScr.Count -gt 0 -and $srcScr.Count -gt 0) { Write-BlendScreens $dir $lay $blendScr $srcScr }
 }
@@ -2058,8 +2081,8 @@ function Resize-Cover([System.Drawing.Image]$img, [int]$w, [int]$h) {
 # ---- upscale settings (the three dropdowns on the Builder tab)
 function Get-ModelChoices {
     $exe = Find-Upscaler
-    $all = @("Auto soft", "Soft x2", "Soft x3", "Soft x4", "Anime x4", "Photo x4")
-    if (-not $exe) { return @("Auto soft", "Anime x4") }
+    $all = @("Auto Soft", "Soft x2", "Soft x3", "Soft x4", "Anime x4", "Photo x4")
+    if (-not $exe) { return @("Auto Soft", "Anime x4") }
     $dir = Join-Path (Split-Path $exe -Parent) "models"
     $has = {
         param($base)
@@ -2069,7 +2092,7 @@ function Get-ModelChoices {
     $soft3 = & $has "realesr-animevideov3-x3"
     $soft4 = & $has "realesr-animevideov3-x4"
     $choices = @()
-    if ($soft2 -and $soft3 -and $soft4) { $choices += "Auto soft" }
+    if ($soft2 -and $soft3 -and $soft4) { $choices += "Auto Soft" }
     if ($soft2) { $choices += "Soft x2" }
     if ($soft3) { $choices += "Soft x3" }
     if ($soft4) { $choices += "Soft x4" }
@@ -2080,7 +2103,7 @@ function Get-ModelChoices {
 }
 
 function Get-SelectedModel([double]$need) {
-    $choice = "Auto soft"
+    $choice = "Auto Soft"
     if ($script:cmbModel -and $script:cmbModel.SelectedItem) { $choice = [string]$script:cmbModel.SelectedItem }
     switch ($choice) {
         "Anime x4" { return @{ Name = "realesrgan-x4plus-anime"; Scale = 4 } }
@@ -3033,8 +3056,17 @@ using System;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Windows.Forms;
+using System.Runtime.InteropServices;
 
 public class NeonCombo : ComboBox {
+    [DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr h, int msg, IntPtr w, IntPtr l);
+    protected override void WndProc(ref Message m) {
+        if (m.Msg == 0x020A && !DroppedDown) {
+            if (Parent != null) SendMessage(Parent.Handle, m.Msg, m.WParam, m.LParam);
+            return;
+        }
+        base.WndProc(ref m);
+    }
     public Color BoxTop = Color.FromArgb(52, 16, 100);
     public Color ItemBack = Color.FromArgb(26, 8, 56);
     public Color ItemSel = Color.FromArgb(110, 24, 140);
@@ -3380,6 +3412,7 @@ function New-StyledCombo([int]$x, [int]$y, [int]$w) {
         $c.FlatStyle = 'Flat'
         $c.BackColor = $script:cPanel2
         $c.ForeColor = $script:cText
+        $c.Add_MouseWheel({ param($s,$e) if (-not $s.DroppedDown) { $e.Handled = $true } })
     }
     $c.Location = New-Object System.Drawing.Point($x, $y)
     $c.Size = New-Object System.Drawing.Size($w, 26)
@@ -5545,6 +5578,8 @@ function Invoke-MapPaint($panel, $e) {
     # the pack currently selected on the Packs tab
     $imgs = @()
     $sel = $script:lbPacks.SelectedItem
+    if ($panel.Tag -is [string] -and $panel.Tag) { $sel = [string]$panel.Tag }
+    if (-not $sel -and $panel -eq $script:pnlMap -and $script:currentPack -and (Test-Path -LiteralPath (Join-Path $Root $script:currentPack))) { $sel = [string]$script:currentPack }
     if ($sel) { $imgs = @(Get-PackImages (Join-Path $Root $sel)) }
 
     $clean = ($panel -eq $script:pnlPrev)
@@ -5981,6 +6016,11 @@ function Get-BtPreview($slot) {
             $gg.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
             $gg.DrawImage($ld.Image, 0, 0, $bmp.Width, $bmp.Height)
             $gg.Dispose(); $ld.Image.Dispose(); $ld.Stream.Dispose()
+            switch ([int]$slot.rot) {
+                90  { $bmp.RotateFlip([System.Drawing.RotateFlipType]::Rotate90FlipNone) }
+                180 { $bmp.RotateFlip([System.Drawing.RotateFlipType]::Rotate180FlipNone) }
+                270 { $bmp.RotateFlip([System.Drawing.RotateFlipType]::Rotate270FlipNone) }
+            }
         }
     } catch { $bmp = $null }
     $script:btCache[$key] = $bmp
@@ -6013,7 +6053,7 @@ function Invoke-BtSrcPaint($g, [int]$W, [int]$H) {
 
     # ---- the picture with the screens laid over it
     if (-not $bmp) {
-        if ($t.Slot.type -eq 'video') { $m = "Video selected - no preview available.`nUse Position... to frame it." }
+        if ($t.Slot.type -eq 'video') { $m = "Video selected - no preview available." }
         else { $m = "Drop a picture or video here, or on a screen below`nThen drag the screens over it and scroll to zoom" }
         $g.DrawString($m, $fnt, $dim, (New-Object System.Drawing.RectangleF 0, 0, $W, $PH), $sf)
     } else {
@@ -6188,7 +6228,7 @@ function Get-BtSizeWarn($t) {
         $d = Get-BtSourceSize $t.Slot
         if (-not $d) { return "" }
         $w = [double]$d[0]; $h = [double]$d[1]
-        if ($t.Slot.type -eq 'video' -and ([int]$t.Slot.rot -eq 90 -or [int]$t.Slot.rot -eq 270)) { $tmp = $w; $w = $h; $h = $tmp }
+        if (([int]$t.Slot.rot -eq 90 -or [int]$t.Slot.rot -eq 270)) { $tmp = $w; $w = $h; $h = $tmp }
         $ds = @(Get-DisplayList)
         $needW = 0.0; $needH = 0.0
         foreach ($sc in $t.Screens) {
@@ -6214,12 +6254,13 @@ function Update-BtInfo {
     $isVid = ($t.Slot.type -eq 'video')
     $script:numBtT0.Value = [decimal][math]::Min(86400, [math]::Max(0, [double]$t.Slot.t0))
     $script:numBtT1.Value = [decimal][math]::Min(86400, [math]::Max(0, [double]$t.Slot.t1))
-    foreach ($c in @($script:numBtT0, $script:numBtT1, $script:btnBtRotL, $script:btnBtRotR)) { $c.Enabled = $isVid }
-    $script:lblBtRot.Text = $(if ($isVid) { "turned {0} deg" -f [int]$t.Slot.rot } else { "" })
+    foreach ($c in @($script:numBtT0, $script:numBtT1)) { $c.Enabled = $isVid }
+    $hasPic = ($t.Slot.type -ne 'none')
+    foreach ($c in @($script:btnBtRotL, $script:btnBtRotR)) { $c.Enabled = $hasPic }
+    $script:lblBtRot.Text = $(if ($hasPic) { "turned {0} deg" -f [int]$t.Slot.rot } else { "" })
     $script:chkBtUp.Checked = [bool]$t.Slot.up
     $script:chkBtUp.Enabled = ($t.Slot.type -eq 'image')
     $script:loadingBt = $false
-    $script:btnBtPos.Enabled = ($t.Slot.type -ne 'none')
     $script:btnBtClear.Enabled = ($t.Slot.type -ne 'none')
     if ($script:pnlBt) { $script:pnlBt.Invalidate() }
     if ($script:pnlBtSrc) { $script:pnlBtSrc.Invalidate() }
@@ -6314,7 +6355,7 @@ function ConvertFrom-BtRecipeGroup($g, [string]$dir) {
     $slot = New-BtSlot
     $slot.zoom = $g.zoom; $slot.cx = $g.cx; $slot.cy = $g.cy; $slot.up = [bool]$g.up
     if ($g.type -eq 'video' -and $g.vpath) { $slot.type = 'video'; $slot.path = $g.vpath; $slot.up = $false; $slot.rot = [int]$g.rot; $slot.t0 = [double]$g.t0; $slot.t1 = [double]$g.t1 }
-    elseif ($g.source) { $slot.type = 'image'; $slot.path = Join-Path (Join-Path $dir "_source") $g.source }
+    elseif ($g.source) { $slot.type = 'image'; $slot.path = Join-Path (Join-Path $dir "_source") $g.source; $slot.rot = [int]$g.rot }
     return $slot
 }
 
@@ -6399,6 +6440,7 @@ function ConvertTo-BtRecipeGroup($slot, $screens, [string]$dir, [string]$srcDir,
             $script:btKeep += , @{ From = $full; To = $fn }
         }
         $g.up = [bool]$slot.up
+        $g.rot = [int]$slot.rot
     } elseif ($slot.type -eq 'video') {
         $g.type = 'video'; $g.vpath = [string]$slot.path; $g.rot = [int]$slot.rot; $g.t0 = [double]$slot.t0; $g.t1 = [double]$slot.t1
     }
@@ -6826,7 +6868,7 @@ function Invoke-Schedule([bool]$force = $false) {
     if (-not $force -and $b -eq $script:schedLast) { return }
     $script:schedLast = $b
     $pk = [string]$s["SchedP$($b + 1)"]
-    if (-not $pk -or $pk -eq '(keep current)') { return }
+    if (-not $pk -or $pk -eq '(Keep Current)') { return }
     $dir = Join-Path $Root $pk
     if (-not (Test-Path -LiteralPath $dir)) { return }
     Set-Status "Schedule: $($script:schedNames[$b]) - applying '$pk'..."
@@ -6839,7 +6881,7 @@ function Update-SchedStatus {
     if ($s.SchedOn -ne '1') { $script:lblSchedNow.Text = "Schedule is off."; return }
     $b = Get-SchedBlock
     $pk = [string]$s["SchedP$($b + 1)"]
-    if (-not $pk) { $pk = '(keep current)' }
+    if (-not $pk) { $pk = '(Keep Current)' }
     $script:lblSchedNow.Text = "Right now: $($script:schedNames[$b]) block - $pk"
 }
 
@@ -6894,7 +6936,13 @@ function Get-PackMeta {
             foreach ($p in $j.PSObject.Properties) {
                 $tg = @()
                 foreach ($t in @($p.Value.tags)) { if ($t) { $tg += [string]$t } }
-                $m[$p.Name] = @{ fav = [bool]$p.Value.fav; tags = $tg; thumb = [string]$p.Value.thumb }
+                $e = @{ fav = [bool]$p.Value.fav; tags = $tg; thumb = [string]$p.Value.thumb }
+                if ($p.Value.saver) {
+                    $sv = @{}
+                    foreach ($q in $p.Value.saver.PSObject.Properties) { $sv[$q.Name] = $q.Value }
+                    $e.saver = $sv
+                }
+                $m[$p.Name] = $e
             }
         }
     } catch { }
@@ -6908,6 +6956,28 @@ function Get-PackMetaFor([string]$name) {
     $m = Get-PackMeta
     if ($m.ContainsKey($name)) { return $m[$name] }
     return @{ fav = $false; tags = @(); thumb = '' }
+}
+# per-pack screen saver options (used when the saver style is Match Packs)
+function Get-PackSaver([string]$name) {
+    $r = @{ include = $true; seconds = 0; motion = 'auto'; type = 'pack'; video = ''; theme = '' }
+    $e = Get-PackMetaFor $name
+    if ($e.ContainsKey('saver') -and $e.saver) {
+        $sv = $e.saver
+        if ($sv.ContainsKey('include')) { $r.include = [bool]$sv.include }
+        if ($sv.ContainsKey('seconds')) { $r.seconds = [int]$sv.seconds }
+        if ($sv.ContainsKey('motion') -and $sv.motion) { $r.motion = [string]$sv.motion }
+        if ($sv.ContainsKey('type') -and $sv.type) { $r.type = [string]$sv.type }
+        if ($sv.ContainsKey('video') -and $sv.video) { $r.video = [string]$sv.video }
+        if ($sv.ContainsKey('theme') -and $sv.theme) { $r.theme = [string]$sv.theme }
+    }
+    return $r
+}
+function Set-PackSaver([string]$name, $opt) {
+    $m = Get-PackMeta
+    $e = Get-PackMetaFor $name
+    $e.saver = @{ include = [bool]$opt.include; seconds = [int]$opt.seconds; motion = [string]$opt.motion; type = [string]$opt.type; video = [string]$opt.video; theme = [string]$opt.theme }
+    $m[$name] = $e
+    Save-PackMeta
 }
 function Set-PackFav([string]$name, [bool]$fav) {
     $m = Get-PackMeta
@@ -7120,7 +7190,7 @@ function Get-GridItems {
     if ($script:cmbGridSort) { $sort = [string]$script:cmbGridSort.SelectedItem }
     if ($sort -eq 'Newest') {
         $names = @($names | Sort-Object -Property @{ Expression = { (Get-Item -LiteralPath (Join-Path $Root $_)).LastWriteTime }; Descending = $true })
-    } elseif ($sort -eq 'Favorites first') {
+    } elseif ($sort -eq 'Favorites First') {
         $names = @($names | Sort-Object -Property @{ Expression = { -not (Get-PackMetaFor $_).fav } }, @{ Expression = { $_ } })
     }
     return $names
@@ -7134,7 +7204,7 @@ function Update-GridTags {
     foreach ($n in $script:lbPacks.Items) { foreach ($t in @((Get-PackMetaFor ([string]$n)).tags)) { $all[$t] = 1 } }
     $script:gridBusy = $true
     $script:cmbGridTag.Items.Clear()
-    [void]$script:cmbGridTag.Items.Add("All tags")
+    [void]$script:cmbGridTag.Items.Add("All Tags")
     foreach ($t in ($all.Keys | Sort-Object)) { [void]$script:cmbGridTag.Items.Add([string]$t) }
     if ($keep -and $script:cmbGridTag.Items.Contains($keep)) { $script:cmbGridTag.SelectedItem = $keep } else { $script:cmbGridTag.SelectedIndex = 0 }
     $script:gridBusy = $false
@@ -7267,11 +7337,11 @@ function New-PackGrid($parent) {
     $script:pnlGrid = $pnl
     $parent.Controls.Add($pnl)
 
-    $script:chkGridFav = New-NeonCheck "Favorites only" 24 4 150 28
+    $script:chkGridFav = New-NeonCheck "Favorites Only" 24 4 150 28
     $script:cmbGridTag = New-StyledCombo 182 4 130
-    [void]$script:cmbGridTag.Items.Add("All tags"); $script:cmbGridTag.SelectedIndex = 0
+    [void]$script:cmbGridTag.Items.Add("All Tags"); $script:cmbGridTag.SelectedIndex = 0
     $script:cmbGridSort = New-StyledCombo 320 4 140
-    foreach ($o in @("A-Z", "Newest", "Favorites first")) { [void]$script:cmbGridSort.Items.Add($o) }
+    foreach ($o in @("A-Z", "Newest", "Favorites First")) { [void]$script:cmbGridSort.Items.Add($o) }
     $script:cmbGridSort.SelectedIndex = 0
     $script:lblCount = New-Label "" 470 8 130 22 $true 9
     $hb = New-HelpButton 626 5 "Pack grid" "Each card shows a slice of every screen's picture, cut into slanted strips. If the pack is one wide panorama, the card shows the center screen's picture instead.`n`nClick a card to select it, double-click to apply it.`nClick the star to mark a favorite.`nRight-click for tags, Edit thumbnail (pick which screen, the compiled strips or the panorama to show on the card), setting it as your Windows lock screen, rename, open folder and delete.`nArrow keys move, Enter applies, Delete removes.`n`nUse 'Favorites only', the tag list and the sort list to narrow things down. Favorites and tags are kept in packmeta.json; pictures are cached in the Thumbs folder (safe to delete)."
@@ -7723,6 +7793,15 @@ function Get-PackPano([string]$dir) {
             if (@($g.screens).Count -lt 2) { continue }
             $f = Join-Path (Join-Path $dir '_source') ([string]$g.source)
             if (Test-Path -LiteralPath $f) {
+                # follow the Builder's Rotate R / Rotate L for this picture
+                $rot = 0; try { $rot = ((([int]$g.rot) % 360) + 360) % 360 } catch { }
+                if ($rot -ne 0) {
+                    if (-not $script:panoRotCache) { $script:panoRotCache = @{} }
+                    $key = "$f|$rot|" + (Get-Item -LiteralPath $f).LastWriteTimeUtc.Ticks
+                    $rf = $script:panoRotCache[$key]
+                    if (-not $rf -or -not (Test-Path -LiteralPath $rf)) { $rf = New-RotatedCopy $f $rot; if ($rf) { $script:panoRotCache[$key] = $rf } }
+                    if ($rf) { $f = $rf }
+                }
                 $z = [double]$g.zoom; if ($z -le 0) { $z = 1.0 }
                 $cx = 0.5; $cy = 0.5
                 if ($null -ne $g.cx) { $cx = [double]$g.cx }
@@ -7972,6 +8051,21 @@ function Apply-PackLockScreen([string]$name) {
 
 # called after a pack is applied: the lock screen follows the pack
 function Update-PackLock([string]$name) {
+    $gs = Get-Settings
+    if ([string]$gs.LockMode -eq 'custom') {
+        $pic = [string]$gs.LockPic
+        if ([string]$gs.LockCustom -eq 'picture' -and $pic -and (Test-Path -LiteralPath $pic)) {
+            try {
+                $ps = Get-PrimarySize
+                $bmp = New-Object System.Drawing.Bitmap($ps.W, $ps.H)
+                Add-LockPicture $bmp $pic @{ cx = 0.5; cy = 0.5; z = 1.0; screen = 1; pano = $false } $false
+                $out = Join-Path $env:TEMP ("WallpaperCC_lock_{0}.png" -f [DateTime]::Now.Ticks)
+                try { $bmp.Save($out, [System.Drawing.Imaging.ImageFormat]::Png) } finally { $bmp.Dispose() }
+                if (Set-LockScreenImage $out) { Save-Setting 'LockSetByApp' '1' }
+            } catch { }
+        } elseif ([string]$gs.LockSetByApp -eq '1') { [void](Restore-DefaultLockScreen) }
+        return
+    }
     $dir = Join-Path $Root $name
     $cfg = Get-LockCfg $dir
     if ($cfg.mode -eq 'none') {
@@ -8083,7 +8177,7 @@ function Get-SaverSourceText {
     $parts = @()
     foreach ($t in ([string]$st.ScreensaverSrc -split '\|')) {
         $t = $t.Trim()
-        if ($t -eq 'fav') { $parts += 'Favorites' } elseif ($t.StartsWith('tag:')) { $parts += ('#' + $t.Substring(4)) }
+        if ($t -eq 'fav') { $parts += 'Favorites' } elseif ($t.StartsWith('tag:')) { $parts += ('#' + $t.Substring(4)) } elseif ($t.StartsWith('pack:')) { $parts += $t.Substring(5) }
     }
     if ($parts.Count -eq 0) { return "All packs" }
     $txt = ($parts -join ', ')
@@ -8113,6 +8207,10 @@ function Show-SaverSourceMenu($anchor) {
     $items += & $mk "Favorites" 'fav' ($src -contains 'fav')
     $tags = @(Get-AllPackTags)
     foreach ($t in $tags) { $items += & $mk ('#' + $t) ('tag:' + $t) ($src -contains ('tag:' + $t)) }
+    $selPack = ''
+    try { $selPack = [string]$script:lbPacks.SelectedItem } catch { }
+    foreach ($e1 in $src) { if ($e1.StartsWith('pack:') -and $e1 -ne ('pack:' + $selPack)) { $items += & $mk ('Pack: ' + $e1.Substring(5)) $e1 $true } }
+    if ($selPack) { $items += & $mk ('Selected Pack: ' + $selPack) ('pack:' + $selPack) ($src -contains ('pack:' + $selPack)) }
     foreach ($it in $items) {
         $it.Add_Click({
             param($s, $e)
@@ -8159,7 +8257,7 @@ function Test-HasBattery {
     try { return (@(Get-CimInstance -ClassName Win32_Battery -ErrorAction Stop).Count -gt 0) } catch { return $false }
 }
 
-$script:powerLabels = @("Never", "1 minute", "2 minutes", "3 minutes", "5 minutes", "10 minutes", "15 minutes", "20 minutes", "30 minutes", "45 minutes", "1 hour", "2 hours", "3 hours", "5 hours")
+$script:powerLabels = @("Never", "1 Minute", "2 Minutes", "3 Minutes", "5 Minutes", "10 Minutes", "15 Minutes", "20 Minutes", "30 Minutes", "45 Minutes", "1 Hour", "2 Hours", "3 Hours", "5 Hours")
 $script:powerMins   = @(0, 1, 2, 3, 5, 10, 15, 20, 30, 45, 60, 120, 180, 300)
 
 function New-PowerCombo([int]$x, [int]$y, [string]$sub, [string]$setting, [string]$kind, [bool]$ac) {
@@ -8488,50 +8586,277 @@ function Add-SettingsScroll($parent, $dlg, [int]$baseTop) {
     $inner.Add_MouseEnter({ try { if (-not ($script:form.ActiveControl -is [System.Windows.Forms.TextBoxBase])) { [void]$script:setScroll.Dlg.Focus() } } catch { } })
 }
 
-function Build-SettingsContent($parent) {
-    $st = Get-Settings
-    $hasBat = Test-HasBattery
-    $dlg = New-Object System.Windows.Forms.Panel
-    $dlg.Location = New-Object System.Drawing.Point(0, -14)
-    $dlg.BackColor = $script:cBg
-    $dlg.Size = New-Object System.Drawing.Size(470, $(if ($hasBat) { 600 } else { 510 }))
-    $parent.Controls.Add($dlg)
+function Get-SaverCfg($st) {
+    $c = @{ Mode = 'match'; Source = 'packs'; Play = 'cycle'; Theme = [string]$st.SaverTheme }
+    if ([string]$st.SaverVideoPlay -eq 'loop') { $c.Play = 'loop' }
+    if ([string]$st.SaverMode) {
+        if ([string]$st.SaverMode -eq 'custom') { $c.Mode = 'custom' }
+        if ([string]$st.SaverSource) { $c.Source = [string]$st.SaverSource }
+    } else {
+        switch ([string]$st.SaverStyle) {
+            'photos' { $c.Mode = 'custom'; $c.Source = 'packs' }
+            'videos' { $c.Mode = 'custom'; $c.Source = 'videos' }
+            'loop'   { $c.Mode = 'custom'; $c.Source = 'videos'; $c.Play = 'loop' }
+            'theme'  { $c.Mode = 'custom'; $c.Source = 'theme' }
+        }
+    }
+    return $c
+}
 
-    # ---- screen saver
+# writes the colours of any theme to saver-theme.txt so the screen saver can use that theme's animation
+function Write-SaverThemeFile([string]$name) {
+    try {
+        if (-not $script:Themes.ContainsKey($name)) { return }
+        $t = $script:Themes[$name]
+        $rgb = { param($x) ("{0},{1},{2}" -f [int]$x[0], [int]$x[1], [int]$x[2]) }
+        $letters = $t.Cyan
+        if ($t.Light) { $letters = $t.Text }
+        $ok = @(120, 255, 190); if ($t.ContainsKey('Ok')) { $ok = $t.Ok }
+        $lines = @(
+            ("bgTop=" + (& $rgb $t.Panel2)), ("bgBottom=" + (& $rgb $t.Bg)),
+            ("edge=" + (& $rgb $t.Accent)), ("sunTop=" + (& $rgb $t.Sun)), ("sunBottom=" + (& $rgb $t.Accent)),
+            ("letters=" + (& $rgb $letters)), ("zero=" + (& $rgb $t.Accent)), ("sub=" + (& $rgb $t.Dim)),
+            ("bar1=" + (& $rgb $t.Accent)), ("bar2=" + (& $rgb $t.Cyan)), ("cut=" + (& $rgb $t.Bg)),
+            ("font=" + (Get-FirstFont $t.TFonts 'Arial Black')),
+            ("text=" + (& $rgb $t.Text)), ("light=" + $(if ($t.Light) { '1' } else { '0' })),
+            ("style=" + $name.ToLowerInvariant().Replace("digital rain", "matrix")),
+            ("nosplash=1"),
+            ("accent=" + (& $rgb $t.Accent)), ("cyan=" + (& $rgb $t.Cyan)), ("purple=" + (& $rgb $t.Purple)),
+            ("orange=" + (& $rgb $t.Orange)), ("sun=" + (& $rgb $t.Sun)), ("ok=" + (& $rgb $ok))
+        )
+        Set-Content -LiteralPath (Join-Path $PSScriptRoot ('saver-theme-' + ($name -replace '\s', '') + '.txt')) -Value $lines -Encoding ASCII
+    } catch { }
+}
+
+# the pop-out's preview panel registers itself here; every saver control calls this after a change
+$script:saverPrevPanel = $null
+function Invoke-SaverChanged {
+    try { if ($script:saverPrevPanel -and -not $script:saverPrevPanel.IsDisposed) { $script:saverPrevPanel.Invalidate() } } catch { }
+}
+
+function Invoke-SaverPreviewPaint($panel, $e) {
+    $ps = $script:packSaverState
+    if (-not $ps) { return }
+    $g = $e.Graphics
+    $fs = New-Object System.Drawing.Font("Segoe UI", 8)
+    $w = $panel.ClientSize.Width; $h = $panel.ClientSize.Height
+    $cap = ''
+    $secs = [int]$ps.Secs
+    if ($secs -le 0) { $secs = 30; try { if ((Get-Settings).ScreensaverSeconds) { $secs = [int](Get-Settings).ScreensaverSeconds } } catch { } }
+    if ($ps.Type -eq 'pack') {
+        if (-not $ps.Include) { $cap = "$($ps.Pack) - left out of the screen saver" }
+        else { $cap = "$($ps.Pack) - pictures, $secs s, pan/zoom $($ps.Motion)" }
+        Invoke-MapPaint $panel $e
+    } else {
+        $full = New-Object System.Drawing.RectangleF(0, 0, $w, $h)
+        $bgb = New-Object System.Drawing.Drawing2D.LinearGradientBrush($full, $script:cDlgA, $script:cDlgB, [single]90)
+        $g.FillRectangle($bgb, $full); $bgb.Dispose()
+        $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+        $g.TextRenderingHint = [System.Drawing.Text.TextRenderingHint]::AntiAliasGridFit
+        $tb = New-Object System.Drawing.SolidBrush($script:cText)
+        $db = New-Object System.Drawing.SolidBrush($script:cDim)
+        if ($ps.Type -eq 'video') {
+            if ($ps.Video) { $cap = "$($ps.Pack) - video: $($ps.Video), $secs s" } else { $cap = "$($ps.Pack) - no video chosen yet" }
+            $big = New-Object System.Drawing.Font("Segoe UI", 30, [System.Drawing.FontStyle]::Bold)
+            $g.DrawString([string][char]0x25B6, $big, $tb, [single]($w / 2 - 26), [single]($h / 2 - 44))
+            $big.Dispose()
+            $g.DrawString("Plays muted, full screen on every monitor", $fs, $db, 16, 16)
+        } else {
+            $tn = [string]$ps.Theme
+            $cap = "$($ps.Pack) - $tn animation, $secs s"
+            if ($tn -and $script:Themes.ContainsKey($tn)) {
+                $t2 = $script:Themes[$tn]
+                $mk = { param($a) [System.Drawing.Color]::FromArgb([int]$a[0], [int]$a[1], [int]$a[2]) }
+                $r = New-Object System.Drawing.RectangleF(10, 10, ($w - 20), ($h - 50))
+                $gb = New-Object System.Drawing.Drawing2D.LinearGradientBrush($r, (& $mk $t2.Panel2), (& $mk $t2.Bg), [single]90)
+                $g.FillRectangle($gb, $r); $gb.Dispose()
+                for ($i = 0; $i -lt 6; $i++) {
+                    if ($i % 2) { $col = $t2.Accent } else { $col = $t2.Cyan }
+                    $pb = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(150, (& $mk $col)))
+                    $g.FillRectangle($pb, [single](24 + $i * 62), [single]($h - 90 - ($i * 9 % 40)), 36, [single](24 + ($i * 9 % 40)))
+                    $pb.Dispose()
+                }
+                $f2 = New-Object System.Drawing.Font("Segoe UI", 18, [System.Drawing.FontStyle]::Bold)
+                $nb = New-Object System.Drawing.SolidBrush((& $mk $t2.Text))
+                $g.DrawString($tn, $f2, $nb, 24, 20)
+                $f2.Dispose(); $nb.Dispose()
+            } else { $g.DrawString("Pick a theme", $fs, $db, 16, 16); $cap = "$($ps.Pack) - no theme chosen yet" }
+        }
+        $tb.Dispose(); $db.Dispose()
+    }
+    $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+    $strip = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(190, 0, 0, 0))
+    $g.FillRectangle($strip, 0, ($h - 28), $w, 28)
+    $strip.Dispose()
+    $cb = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::White)
+    $g.DrawString($cap, $fs, $cb, 8, ($h - 24))
+    $cb.Dispose()
+    $pen = New-Object System.Drawing.Pen($script:cCyan, 1)
+    $g.DrawRectangle($pen, 0, 0, ($w - 1), ($h - 1))
+    $pen.Dispose()
+    $fs.Dispose()
+}
+$script:packSaverState = $null
+
+function Add-LockControls($dlg, [int]$y0) {
+    $stL = Get-Settings
+    $dlg.Controls.Add((New-Heading "Lock screen" 24 $y0 300))
+    $dlg.Controls.Add((New-HelpButton 436 ($y0 - 2) "Lock screen" "Mode:`n- Match Packs: the lock screen follows the pack in use, with the lock screen options saved with that pack (use the Lock screen button in the Builder).`n- Custom: one lock screen for every pack, set here.`n`nCustom can be Windows' default lock screen or a picture you choose. The change happens the next time a pack is applied."))
+    $dlg.Controls.Add((New-Label "Mode" 24 ($y0 + 36) 130 22 $true 9))
+    $cmbLMode = New-StyledCombo 160 ($y0 + 32) 286
+    foreach ($o in @("Match Packs", "Custom")) { [void]$cmbLMode.Items.Add($o) }
+    $cmbLMode.SelectedIndex = $(if ([string]$stL.LockMode -eq 'custom') { 1 } else { 0 })
+    $dlg.Controls.Add($cmbLMode)
+    $lblLNote = New-Label "The lock screen follows the pack in use, using the options saved with that pack." 24 ($y0 + 72) 422 40 $true 9
+    $dlg.Controls.Add($lblLNote)
+    $lblLSrc = New-Label "Picture" 24 ($y0 + 72) 130 22 $true 9
+    $cmbLSrc = New-StyledCombo 160 ($y0 + 68) 286
+    foreach ($o in @("Windows Default", "My Own Picture")) { [void]$cmbLSrc.Items.Add($o) }
+    $cmbLSrc.SelectedIndex = $(if ([string]$stL.LockCustom -eq 'picture') { 1 } else { 0 })
+    $btnLPic = New-Btn "Choose Picture..." 160 ($y0 + 102) 190 'normal' 30
+    $btnLPic.Font = Get-RetroFont 8
+    $lblLFile = New-Label "" 24 ($y0 + 138) 422 22 $true 9
+    foreach ($c in @($lblLSrc, $cmbLSrc, $btnLPic, $lblLFile)) { $dlg.Controls.Add($c) }
+    $upd = {
+        $custom = ($cmbLMode.SelectedIndex -eq 1)
+        $lblLNote.Visible = (-not $custom)
+        $lblLSrc.Visible = $custom; $cmbLSrc.Visible = $custom
+        $pic = ($custom -and $cmbLSrc.SelectedIndex -eq 1)
+        $btnLPic.Visible = $pic; $lblLFile.Visible = $pic
+        $f = [string](Get-Settings).LockPic
+        $lblLFile.Text = $(if ($f) { [IO.Path]::GetFileName($f) } else { "No picture chosen yet." })
+    }.GetNewClosure()
+    & $upd
+    $cmbLMode.Add_SelectedIndexChanged({ Save-Setting 'LockMode' $(if ($cmbLMode.SelectedIndex -eq 1) { 'custom' } else { 'match' }); & $upd }.GetNewClosure())
+    $cmbLSrc.Add_SelectedIndexChanged({ Save-Setting 'LockCustom' $(if ($cmbLSrc.SelectedIndex -eq 1) { 'picture' } else { 'default' }); & $upd }.GetNewClosure())
+    $btnLPic.Add_Click({
+        $d = New-Object System.Windows.Forms.OpenFileDialog
+        $d.Title = "Pick a lock screen picture"
+        $d.Filter = "Pictures|*.jpg;*.jpeg;*.png;*.bmp|All files|*.*"
+        if ($d.ShowDialog() -eq 'OK') { Save-Setting 'LockPic' $d.FileName; & $upd }
+    }.GetNewClosure())
+}
+
+function Add-SaverControls($dlg, $st) {
+    $cfg = Get-SaverCfg $st
     $dlg.Controls.Add((New-Heading "Screen saver" 24 16 300))
-    $dlg.Controls.Add((New-HelpButton 436 14 "Screen saver" "The screen saver plays your wallpaper packs full screen (one picture per screen) and fades from one pack to the next. Any key or mouse movement ends it.`n`nTick 'Use this screen saver' to turn it on.`n`n'Change pack every' is how long each pack stays up. 'Packs' limits it to favorites and/or tags. 'Start after' is how long the PC sits idle before it starts.`n`nThe box next to Preview switches to an animation that matches your theme (starfield, rain, pipes and so on). The Wallpaper theme has no animation, so it keeps showing your packs."))
+    $dlg.Controls.Add((New-HelpButton 436 14 "Screen saver" "Mode:`n- Match Packs: the screen saver plays the pack in use, with the screen saver options saved with that pack (use the Screen saver button in the Builder to set them).`n- Custom: one screen saver for everything, whatever pack is in use.`n`nCustom sources:`n- Pack Media: your wallpaper packs (all, favorites, tags or one pack), fading from one to the next. Panoramas can slowly pan and zoom.`n- Pictures: pictures you choose.`n- Videos: videos from the Animated tab, cycled or looped.`n- Theme Animation: the animation of any theme, whatever theme the app uses.`n`nAny key or mouse move ends the screen saver. Windows starts it after the idle time below."))
 
-    $dlg.Controls.Add((New-Label "Change pack every" 24 52 190 22 $true 9))
-    $numSec = New-NeonSpin 220 50 70 5 3600 0 5
+    $dlg.Controls.Add((New-Label "Mode" 24 52 130 22 $true 9))
+    $cmbMode = New-StyledCombo 160 48 286
+    foreach ($o in @("Match Packs", "Custom")) { [void]$cmbMode.Items.Add($o) }
+    $cmbMode.SelectedIndex = $(if ($cfg.Mode -eq 'custom') { 1 } else { 0 })
+    $dlg.Controls.Add($cmbMode)
+    $lblNote = New-Label "The pack in use plays with the screen saver options saved with it. Set them per pack with the Screen saver button in the Builder." 24 90 422 60 $true 9
+    $dlg.Controls.Add($lblNote)
+    $lblSrc = New-Label "Source" 24 90 130 22 $true 9
+    $cmbSource = New-StyledCombo 160 86 286
+    $srcKeys = @('packs', 'pictures', 'videos', 'theme')
+    foreach ($o in @("Pack Media", "Pictures", "Videos", "Theme Animation")) { [void]$cmbSource.Items.Add($o) }
+    $cmbSource.SelectedIndex = [math]::Max(0, [array]::IndexOf($srcKeys, $cfg.Source))
+    $dlg.Controls.Add($lblSrc); $dlg.Controls.Add($cmbSource)
+
+    # options that follow the source
+    $lblSec = New-Label "Change Every" 24 130 130 22 $true 9
+    $numSec = New-NeonSpin 160 128 70 5 3600 0 5
     $v = 30; try { if ($st.ScreensaverSeconds) { $v = [int]$st.ScreensaverSeconds } } catch { }
     $numSec.Value = [decimal][math]::Max(5, [math]::Min(3600, $v))
-    $dlg.Controls.Add($numSec)
-    $dlg.Controls.Add((New-Label "seconds" 296 52 90 22 $true 9))
-    $numSec.Add_ValueChanged({ Save-Setting 'ScreensaverSeconds' ([string][int]$numSec.Value) }.GetNewClosure())
-
-    $script:btnSaverSrc = New-Btn ("Packs: " + (Get-SaverSourceText)) 24 86 300 'normal' 30
+    $lblSecs = New-Label "seconds" 238 130 90 22 $true 9
+    $numSec.Add_ValueChanged({ Save-Setting 'ScreensaverSeconds' ([string][int]$numSec.Value); Invoke-SaverChanged }.GetNewClosure())
+    $script:btnSaverSrc = New-Btn ("Packs: " + (Get-SaverSourceText)) 24 162 300 'normal' 30
     $script:btnSaverSrc.Font = Get-RetroFont 8
     $script:btnSaverSrc.Add_Click({ Show-SaverSourceMenu $script:btnSaverSrc })
-    $dlg.Controls.Add($script:btnSaverSrc)
+    $btnSrc = $script:btnSaverSrc
 
-    $dlg.Controls.Add((New-Label "Start after idle for" 24 130 190 22 $true 9))
-    $numIdle = New-NeonSpin 220 128 70 1 240 0 1
+    $btnPics = New-Btn "Pictures..." 24 162 200 'normal' 30
+    $btnPics.Font = Get-RetroFont 8
+    $btnPicsClear = New-Btn "Clear" 232 162 92 'normal' 30
+    $btnPicsClear.Font = Get-RetroFont 8
+    $lblPics = New-Label "" 332 168 120 22 $true 8
+    $updPics = { $n = @(([string](Get-Settings).SaverPics -split '\|') | Where-Object { $_.Trim() }).Count; $lblPics.Text = "$n chosen" }.GetNewClosure()
+    $btnPics.Add_Click({
+        $d = New-Object System.Windows.Forms.OpenFileDialog
+        $d.Filter = "Pictures|*.jpg;*.jpeg;*.png;*.bmp;*.gif"
+        $d.Multiselect = $true
+        if ($d.ShowDialog() -eq 'OK' -and $d.FileNames.Count -gt 0) { Save-Setting 'SaverPics' ($d.FileNames -join '|'); & $updPics; Invoke-SaverChanged }
+    }.GetNewClosure())
+    $btnPicsClear.Add_Click({ Save-Setting 'SaverPics' ''; & $updPics; Invoke-SaverChanged }.GetNewClosure())
+    & $updPics
+
+    $btnVids = New-Btn "Videos..." 24 162 200 'normal' 30
+    $btnVids.Font = Get-RetroFont 8
+    $btnVids.Add_Click({ Show-SaverVideoPicker; Invoke-SaverChanged })
+    $lblPlay = New-Label "Play" 24 130 130 22 $true 9
+    $cmbPlay = New-StyledCombo 160 126 286
+    foreach ($o in @("Cycle Videos", "Loop First Video")) { [void]$cmbPlay.Items.Add($o) }
+    $cmbPlay.SelectedIndex = $(if ($cfg.Play -eq 'loop') { 1 } else { 0 })
+    $cmbPlay.Add_SelectedIndexChanged({ Save-Setting 'SaverVideoPlay' $(if ($cmbPlay.SelectedIndex -eq 1) { 'loop' } else { 'cycle' }); Invoke-SaverChanged }.GetNewClosure())
+
+    $lblTheme = New-Label "Theme" 24 130 130 22 $true 9
+    $cmbTheme = New-StyledCombo 160 126 286
+    [void]$cmbTheme.Items.Add("Current Theme")
+    foreach ($tn in $script:ThemeNames) { if ($tn -ne 'Wallpaper') { [void]$cmbTheme.Items.Add($tn) } }
+    $curTheme = [string]$st.SaverTheme
+    if ($curTheme -and $cmbTheme.Items.Contains($curTheme)) { $cmbTheme.SelectedItem = $curTheme } else { $cmbTheme.SelectedIndex = 0 }
+    $cmbTheme.Add_SelectedIndexChanged({
+        if ($cmbTheme.SelectedIndex -le 0) { Save-Setting 'SaverTheme' '' }
+        else { $nm = [string]$cmbTheme.SelectedItem; Write-SaverThemeFile $nm; Save-Setting 'SaverTheme' $nm }
+        Invoke-SaverChanged
+    }.GetNewClosure())
+
+    $chkMotion = New-NeonCheck "Slow Pan/Zoom On Panoramas" 24 198 340 28
+    $chkMotion.Checked = ([string]$st.SaverMotion -ne '0')
+    $chkMotion.Add_CheckedChanged({ Save-Setting 'SaverMotion' $(if ($chkMotion.Checked) { '1' } else { '0' }); Invoke-SaverChanged }.GetNewClosure())
+
+    foreach ($c in @($lblSec, $numSec, $lblSecs, $btnSrc, $btnPics, $btnPicsClear, $lblPics, $btnVids, $lblPlay, $cmbPlay, $lblTheme, $cmbTheme, $chkMotion)) { $dlg.Controls.Add($c) }
+
+    $syncMode = {
+        $custom = ($cmbMode.SelectedIndex -eq 1)
+        $k = $srcKeys[[math]::Max(0, $cmbSource.SelectedIndex)]
+        $lblNote.Visible = (-not $custom)
+        $lblSrc.Visible = $custom; $cmbSource.Visible = $custom
+        $timed = $custom -and ($k -eq 'packs' -or $k -eq 'pictures')
+        $lblSec.Visible = $timed; $numSec.Visible = $timed; $lblSecs.Visible = $timed
+        $chkMotion.Visible = $timed
+        $btnSrc.Visible = ($custom -and $k -eq 'packs')
+        $btnPics.Visible = ($custom -and $k -eq 'pictures'); $btnPicsClear.Visible = $btnPics.Visible; $lblPics.Visible = $btnPics.Visible
+        $btnVids.Visible = ($custom -and $k -eq 'videos'); $lblPlay.Visible = $btnVids.Visible; $cmbPlay.Visible = $btnVids.Visible
+        $lblTheme.Visible = ($custom -and $k -eq 'theme'); $cmbTheme.Visible = $lblTheme.Visible
+    }.GetNewClosure()
+    $cmbMode.Add_SelectedIndexChanged({
+        Save-Setting 'SaverMode' $(if ($cmbMode.SelectedIndex -eq 1) { 'custom' } else { 'match' })
+        Save-Setting 'SaverSource' $srcKeys[[math]::Max(0, $cmbSource.SelectedIndex)]
+        & $syncMode; Invoke-SaverChanged
+    }.GetNewClosure())
+    $cmbSource.Add_SelectedIndexChanged({
+        Save-Setting 'SaverSource' $srcKeys[[math]::Max(0, $cmbSource.SelectedIndex)]
+        & $syncMode; Invoke-SaverChanged
+    }.GetNewClosure())
+    & $syncMode
+    $tt.SetToolTip($cmbMode, "Match Packs: each pack's own screen saver options. Custom: one screen saver for everything.")
+    $tt.SetToolTip($cmbSource, "What the custom screen saver plays")
+    $tt.SetToolTip($btnVids, "Choose which videos from the Animated tab to play (none ticked = all of them)")
+    $tt.SetToolTip($btnPics, "Choose the pictures to show (wide ones pan and zoom like panoramas)")
+    $tt.SetToolTip($chkMotion, "Slowly pans and zooms panorama pictures. Ordinary pictures stay still.")
+
+    $dlg.Controls.Add((New-Label "Start After Idle For" 24 238 190 22 $true 9))
+    $numIdle = New-NeonSpin 220 236 70 1 240 0 1
     $idleMin = 5
     try { $t = (Get-ItemProperty 'HKCU:\Control Panel\Desktop' -Name ScreenSaveTimeOut -ErrorAction Stop).ScreenSaveTimeOut; if ([int]$t -ge 60) { $idleMin = [int]($t / 60) } } catch { }
     $numIdle.Value = [decimal][math]::Max(1, [math]::Min(240, $idleMin))
     $dlg.Controls.Add($numIdle)
-    $dlg.Controls.Add((New-Label "minutes" 296 130 90 22 $true 9))
+    $dlg.Controls.Add((New-Label "minutes" 296 238 90 22 $true 9))
 
-    $chkUse = New-NeonCheck "Use this screen saver" 24 164 300 28
+    $chkUse = New-NeonCheck "Use This Screen Saver" 24 272 300 28
     $cur = ''; try { $cur = [string](Get-ItemProperty 'HKCU:\Control Panel\Desktop' -Name 'SCRNSAVE.EXE' -ErrorAction Stop).'SCRNSAVE.EXE' } catch { }
     $chkUse.Checked = ($cur -and ([System.IO.Path]::GetFileName($cur) -ieq 'Ekk0h.scr'))
     $dlg.Controls.Add($chkUse)
-    $chkLock = New-NeonCheck "Ask for my password when it ends" 24 194 340 28
+    $chkLock = New-NeonCheck "Ask For My Password When It Ends" 24 302 340 28
     $sec = '0'; try { $sec = [string](Get-ItemProperty 'HKCU:\Control Panel\Desktop' -Name 'ScreenSaverIsSecure' -ErrorAction Stop).ScreenSaverIsSecure } catch { }
     $chkLock.Checked = ($sec -eq '1')
     $dlg.Controls.Add($chkLock)
 
-    $lblSaver = New-Label "" 24 226 420 22 $true 9
+    $lblSaver = New-Label "" 24 332 420 22 $true 9
     $dlg.Controls.Add($lblSaver)
     $applySaver = {
         $k = 'HKCU:\Control Panel\Desktop'
@@ -8560,38 +8885,44 @@ function Build-SettingsContent($parent) {
     $chkLock.Add_CheckedChanged({ if ($chkUse.Checked) { & $applySaver } }.GetNewClosure())
     $numIdle.Add_ValueChanged({ if ($chkUse.Checked) { & $applySaver } }.GetNewClosure())
 
-    $btnPrev = New-Btn "Preview" 24 256 120 'normal' 30
+    $btnPrev = New-Btn "Preview" 24 362 120 'normal' 30
     $btnPrev.Add_Click({
         $saver = Get-SaverPath
         if ($saver) { Start-Process -FilePath $saver -ArgumentList "/s" }
         else { $lblSaver.Text = "The screen saver file isn't available in this copy." }
     }.GetNewClosure())
     $dlg.Controls.Add($btnPrev)
+}
 
-    $cmbSaverStyle = New-StyledCombo 160 258 286
-    [void]$cmbSaverStyle.Items.Add("Show my wallpaper packs")
-    [void]$cmbSaverStyle.Items.Add("Animation matching my theme")
-    $cmbSaverStyle.SelectedIndex = $(if ([string]$st.SaverStyle -eq 'theme') { 1 } else { 0 })
-    $cmbSaverStyle.Add_SelectedIndexChanged({ Save-Setting 'SaverStyle' $(if ($cmbSaverStyle.SelectedIndex -eq 1) { 'theme' } else { '' }) }.GetNewClosure())
-    $dlg.Controls.Add($cmbSaverStyle)
+function Build-SettingsContent($parent) {
+    $st = Get-Settings
+    $hasBat = Test-HasBattery
+    $dlg = New-Object System.Windows.Forms.Panel
+    $dlg.Location = New-Object System.Drawing.Point(0, -14)
+    $dlg.BackColor = $script:cBg
+    $dlg.Size = New-Object System.Drawing.Size(470, $(if ($hasBat) { 830 } else { 740 }))
+    $parent.Controls.Add($dlg)
+
+    Add-SaverControls $dlg $st
+    Add-LockControls $dlg 420
 
     # ---- power and display
-    $y = 308
+    $y = 550
     $dlg.Controls.Add((New-Heading "Power and display" 24 $y 300))
     $dlg.Controls.Add((New-HelpButton 436 ($y - 2) "Power and display" "These change your Windows power plan, the same settings as Settings > System > Power.`n`n'Turn off the display' blanks the screens after that much idle time. 'Put the PC to sleep' is Windows sleep mode; choose Never to turn it off.`n`nThe buttons below open the matching Windows settings pages."))
     $y += 38
-    $dlg.Controls.Add((New-Label "Turn off the display" 24 ($y + 2) 190 22 $true 9))
+    $dlg.Controls.Add((New-Label "Turn Off The Display" 24 ($y + 2) 190 22 $true 9))
     $dlg.Controls.Add((New-PowerCombo 220 $y 'SUB_VIDEO' 'VIDEOIDLE' 'monitor' $true))
     if ($hasBat) {
-        $dlg.Controls.Add((New-Label "...on battery" 24 ($y + 36) 190 22 $true 9))
+        $dlg.Controls.Add((New-Label "...On Battery" 24 ($y + 36) 190 22 $true 9))
         $dlg.Controls.Add((New-PowerCombo 220 ($y + 34) 'SUB_VIDEO' 'VIDEOIDLE' 'monitor' $false))
         $y += 34
     }
     $y += 38
-    $dlg.Controls.Add((New-Label "Put the PC to sleep" 24 ($y + 2) 190 22 $true 9))
+    $dlg.Controls.Add((New-Label "Put The PC To Sleep" 24 ($y + 2) 190 22 $true 9))
     $dlg.Controls.Add((New-PowerCombo 220 $y 'SUB_SLEEP' 'STANDBYIDLE' 'standby' $true))
     if ($hasBat) {
-        $dlg.Controls.Add((New-Label "...on battery" 24 ($y + 36) 190 22 $true 9))
+        $dlg.Controls.Add((New-Label "...On Battery" 24 ($y + 36) 190 22 $true 9))
         $dlg.Controls.Add((New-PowerCombo 220 ($y + 34) 'SUB_SLEEP' 'STANDBYIDLE' 'standby' $false))
         $y += 34
     }
@@ -8614,6 +8945,15 @@ function Build-SettingsContent($parent) {
     $btnAbout.Add_Click({ Show-AboutDialog })
     $dlg.Controls.Add($btnAbout)
 
+    $btnSaveSet = New-Btn "SAVE SETTINGS" 24 ($y + 84) 300 'primary' 34
+    $btnSaveSet.Add_Click({
+        try { Invoke-SaverChanged } catch { }
+        Set-Status "Settings saved."
+        if ($script:activeTab -eq 4) { Switch-Tab $script:prevTab }
+    })
+    $dlg.Controls.Add($btnSaveSet)
+
+    $dlg.Size = New-Object System.Drawing.Size(470, ($y + 84 + 34 + 40))
     Add-SettingsScroll $parent $dlg -14
 }
 
@@ -8621,6 +8961,153 @@ function Build-SettingsContent($parent) {
 function Show-SettingsWindow {
     if ($script:activeTab -eq 4) { Switch-Tab $script:prevTab }
     else { $script:prevTab = $script:activeTab; Switch-Tab 4 }
+}
+
+function Show-SaverDialog {
+    $pk = [string]$script:btPack
+    if (-not $pk) { Set-Status "Save this pack first (give it a name and press Save), then set its screen saver."; return }
+    $o = Get-PackSaver $pk
+    $f = New-Object System.Windows.Forms.Form
+    $f.Text = "Screen Saver"
+    $f.StartPosition = 'CenterParent'
+    $f.FormBorderStyle = 'FixedDialog'
+    $f.MaximizeBox = $false; $f.MinimizeBox = $false; $f.ShowInTaskbar = $false
+    $f.BackColor = $script:cBg; $f.ForeColor = $script:cText
+    $f.Font = New-Object System.Drawing.Font("Segoe UI", 10)
+    if ($script:appIcon) { $f.Icon = $script:appIcon }
+    $f.Add_HandleCreated({ param($s, $e) Set-TitleBar $s.Handle })
+    $f.ClientSize = New-Object System.Drawing.Size(960, 360)
+
+    $typeKeys = @('pack', 'video', 'theme')
+    $ps = @{ Pack = $pk; Type = $o.type; Video = $o.video; Theme = $o.theme; Secs = $o.seconds; Motion = $o.motion; Include = [bool]$o.include }
+    $script:packSaverState = $ps
+
+    $f.Controls.Add((New-Heading "Screen saver" 24 16 436))
+    $f.Controls.Add((New-HelpButton 436 14 "Pack screen saver" "These options belong to this pack. They are used when the screen saver mode on the Settings tab is Match Packs. Custom mode on the Settings tab ignores them.`n`nPlays: Pack Media shows this pack's pictures (panoramas can slowly pan and zoom). Video plays a video from the Animated tab. Theme Animation plays a theme's animation.`n`nSeconds On Screen: how long this pack stays before the next one (0 = the Settings tab value)."))
+    $f.Controls.Add((New-Label $pk 24 40 436 22 $true 10))
+
+    $f.Controls.Add((New-Heading "Plays" 24 82 436))
+    $cmbType = New-StyledCombo 24 106 422
+    foreach ($x in @("Pack Media", "Video", "Theme Animation")) { [void]$cmbType.Items.Add($x) }
+    $cmbType.SelectedIndex = [math]::Max(0, [array]::IndexOf($typeKeys, [string]$o.type))
+    $f.Controls.Add($cmbType)
+
+    $f.Controls.Add((New-Heading "Options" 24 154 436))
+    $f.Controls.Add((New-Label "Seconds On Screen" 24 186 160 22 $true 9))
+    $numS = New-NeonSpin 190 184 80 0 3600 0 5
+    $numS.Value = [decimal][math]::Max(0, [math]::Min(3600, [int]$o.seconds))
+    $f.Controls.Add($numS)
+    $f.Controls.Add((New-Label "0 = Settings Tab Value" 282 188 170 22 $true 8))
+
+    $lblM = New-Label "Slow Pan/Zoom" 24 226 160 22 $true 9
+    $cmbM = New-StyledCombo 190 222 256
+    foreach ($x in @("Auto", "On", "Off")) { [void]$cmbM.Items.Add($x) }
+    $cmbM.SelectedItem = (Get-Culture).TextInfo.ToTitleCase([string]$o.motion)
+    if ($cmbM.SelectedIndex -lt 0) { $cmbM.SelectedIndex = 0 }
+
+    $lblV = New-Label "Video" 24 226 160 22 $true 9
+    $cmbV = New-StyledCombo 190 222 256
+    foreach ($v in @(Get-AnimatedFiles)) {
+        $ext = [IO.Path]::GetExtension($v.Name).ToLower()
+        if ($ext -eq '.mp4' -or $ext -eq '.m4v' -or $ext -eq '.mov') { [void]$cmbV.Items.Add($v.Name) }
+    }
+    if ($o.video -and $cmbV.Items.Contains([string]$o.video)) { $cmbV.SelectedItem = [string]$o.video } elseif ($cmbV.Items.Count -gt 0) { $cmbV.SelectedIndex = 0 }
+
+    $lblT = New-Label "Theme" 24 226 160 22 $true 9
+    $cmbT = New-StyledCombo 190 222 256
+    foreach ($tn in $script:ThemeNames) { if ($tn -ne 'Wallpaper') { [void]$cmbT.Items.Add($tn) } }
+    if ($o.theme -and $cmbT.Items.Contains([string]$o.theme)) { $cmbT.SelectedItem = [string]$o.theme } else { $cmbT.SelectedIndex = 0 }
+    foreach ($c in @($lblM, $cmbM, $lblV, $cmbV, $lblT, $cmbT)) { $f.Controls.Add($c) }
+
+    $chkInc = New-NeonCheck "Include In Screen Saver" 24 264 300 28
+    $chkInc.Checked = [bool]$o.include
+    $f.Controls.Add($chkInc)
+
+    $pv = New-Object System.Windows.Forms.Panel
+    $pv.Location = New-Object System.Drawing.Point(500, 46)
+    $pv.Size = New-Object System.Drawing.Size(436, 260)
+    $pv.Tag = $pk
+    Set-DoubleBuffered $pv
+    $pv.Add_Paint({ param($s, $e) Invoke-SaverPreviewPaint $s $e })
+    $f.Controls.Add((New-Heading "Preview" 500 16 436))
+    $f.Controls.Add($pv)
+    $script:saverPrevPanel = $pv
+
+    $sync = {
+        $ps.Type = $typeKeys[[math]::Max(0, $cmbType.SelectedIndex)]
+        $ps.Secs = [int]$numS.Value
+        $ps.Motion = $cmbM.SelectedItem.ToString().ToLower()
+        $ps.Video = [string]$cmbV.SelectedItem
+        $ps.Theme = [string]$cmbT.SelectedItem
+        $ps.Include = [bool]$chkInc.Checked
+        $lblM.Visible = ($ps.Type -eq 'pack'); $cmbM.Visible = $lblM.Visible
+        $lblV.Visible = ($ps.Type -eq 'video'); $cmbV.Visible = $lblV.Visible
+        $lblT.Visible = ($ps.Type -eq 'theme'); $cmbT.Visible = $lblT.Visible
+        $pv.Invalidate()
+    }.GetNewClosure()
+    $cmbType.Add_SelectedIndexChanged($sync); $cmbM.Add_SelectedIndexChanged($sync); $cmbV.Add_SelectedIndexChanged($sync); $cmbT.Add_SelectedIndexChanged($sync)
+    $numS.Add_ValueChanged($sync); $chkInc.Add_CheckedChanged($sync)
+    & $sync
+
+    $ok = New-Btn "Save" 24 308 120 'cyan' 32
+    $cancel = New-Btn "Cancel" 152 308 120 'normal' 32
+    $f.Controls.Add($ok); $f.Controls.Add($cancel)
+    $ok.Tag.Dlg = $f; $cancel.Tag.Dlg = $f
+    $ok.Add_Click({
+        param($s, $e)
+        $d = $s.Tag.Dlg
+        $p = $script:packSaverState
+        if ($p.Type -eq 'theme' -and $p.Theme) { Write-SaverThemeFile ([string]$p.Theme) }
+        Set-PackSaver $p.Pack @{ include = $p.Include; seconds = $p.Secs; motion = $p.Motion; type = $p.Type; video = $p.Video; theme = $p.Theme }
+        $d.Close()
+    })
+    $cancel.Add_Click({ param($s, $e) $s.Tag.Dlg.Close() })
+    try { [void]$f.ShowDialog($script:form) } finally { $script:saverPrevPanel = $null; $script:packSaverState = $null; $f.Dispose() }
+}
+
+function Show-SaverVideoPicker {
+    $f = New-Object System.Windows.Forms.Form
+    $f.Text = "Screen Saver Videos"
+    $f.StartPosition = 'CenterParent'
+    $f.FormBorderStyle = 'FixedDialog'
+    $f.MaximizeBox = $false; $f.MinimizeBox = $false; $f.ShowInTaskbar = $false
+    $f.BackColor = $script:cBg; $f.ForeColor = $script:cText
+    $f.Font = New-Object System.Drawing.Font("Segoe UI", 10)
+    if ($script:appIcon) { $f.Icon = $script:appIcon }
+    $f.Add_HandleCreated({ param($s, $e) Set-TitleBar $s.Handle })
+    $f.ClientSize = New-Object System.Drawing.Size(440, 420)
+    $f.Controls.Add((New-Heading "Videos" 24 14 392))
+    $f.Controls.Add((New-Label "Click videos to select them. Nothing selected = all of them. Loop repeats the first one. The saver plays mp4, m4v and mov files." 24 44 392 40 $true 9))
+    $clb = New-StyledList 24 90 392 250
+    $clb.SelectionMode = 'MultiSimple'
+    $f.Controls.Add($clb)
+    Add-ThemedScroll $clb $f
+    $picked = @(([string](Get-Settings).ScreensaverVideos -split '\|') | Where-Object { $_.Trim() })
+    foreach ($v in @(Get-AnimatedFiles)) {
+        $ext = [IO.Path]::GetExtension($v.Name).ToLower()
+        if ($ext -eq '.mp4' -or $ext -eq '.m4v' -or $ext -eq '.mov') {
+            $ix = $clb.Items.Add($v.Name)
+            if ($picked -contains $v.Name) { $clb.SetSelected($ix, $true) }
+        }
+    }
+    Sync-ThemedBar $clb
+    $msg = New-Label "" 24 346 392 22 $true 9
+    if ($clb.Items.Count -eq 0) { $msg.Text = "No mp4 videos in the Animated tab yet." }
+    $f.Controls.Add($msg)
+    $ok = New-Btn "Save" 24 374 120 'cyan' 32
+    $cancel = New-Btn "Cancel" 152 374 120 'normal' 32
+    $f.Controls.Add($ok); $f.Controls.Add($cancel)
+    $f.Tag = @{ List = $clb }
+    $ok.Tag.Dlg = $f; $cancel.Tag.Dlg = $f
+    $ok.Add_Click({
+        param($s, $e)
+        $d = $s.Tag.Dlg
+        $names = @(); foreach ($i in $d.Tag.List.SelectedItems) { $names += [string]$i }
+        Save-Setting 'ScreensaverVideos' ($names -join '|')
+        $d.Close()
+    })
+    $cancel.Add_Click({ param($s, $e) $s.Tag.Dlg.Close() })
+    try { [void]$f.ShowDialog($script:form) } finally { $f.Dispose() }
 }
 # ---------------------------------------------------------------- first-run setup wizard
 # Five short pages: welcome, theme, optional add-ons, startup options, finish. Runs once on first launch
@@ -8824,9 +9311,9 @@ function Show-SetupWizard {
     $pages[2].Controls.Add((New-Label "ffmpeg cuts a video across your screens. The AI upscaler sharpens pictures in the Builder. Get downloads and sets up the first two for you; Lively is installed separately." 24 160 512 70 $true 9))
 
     # 4: startup options
-    $wzStart = New-NeonCheck "Start with Windows (hidden in the tray)" 24 14 500
-    $wzHot = New-NeonCheck "Global hotkeys (Ctrl+Alt+Right / Left, P, R)" 24 50 500
-    $wzLoad = New-NeonCheck "Show the loading screen when the app starts" 24 86 500
+    $wzStart = New-NeonCheck "Start With Windows (Hidden In The Tray)" 24 14 500
+    $wzHot = New-NeonCheck "Global Hotkeys (Ctrl+Alt+Right / Left, P, R)" 24 50 500
+    $wzLoad = New-NeonCheck "Show The Loading Screen When The App Starts" 24 86 500
     $wzStart.Checked = [bool]$script:chkStartWin.Checked
     $wzHot.Checked = [bool]$script:chkHot.Checked
     $wzLoad.Checked = [bool]$script:chkLoadScr.Checked
@@ -8933,7 +9420,7 @@ $tt.InitialDelay = 400
 $script:tabs = @(
     @{ Text = "PACKS";    X = 24;  W = 92;  Hidden = $false },
     @{ Text = "ANIMATED"; X = 124; W = 118; Hidden = $false },
-    @{ Text = "DISPLAYS"; X = 250; W = 112; Hidden = $false },
+    @{ Text = "DISPLAY"; X = 250; W = 112; Hidden = $false },
     @{ Text = "BUILDER";  X = 370; W = 108; Hidden = $false },
     @{ Text = "SETTINGS"; X = 486; W = 118; Hidden = $true }
 )
@@ -9112,7 +9599,7 @@ foreach ($b in @($btnRandom, $btnExport, $btnNewPack, $btnImport, $btnOpenPacks)
 
 # auto-shuffle
 $pnlPacks.Controls.Add((New-Heading "Auto shuffle" 668 260 218))
-$chkShuffle = New-NeonCheck "Auto-shuffle every" 668 284 160 28
+$chkShuffle = New-NeonCheck "Auto-Shuffle Every" 668 284 160 28
 $script:chkShuffle = $chkShuffle
 $pnlPacks.Controls.Add($chkShuffle)
 $numMin = New-NeonSpin 832 286 56 1 1440 0 1
@@ -9128,7 +9615,7 @@ $tt.SetToolTip($script:btnShuffleSrc, "Choose which packs auto-shuffle picks fro
 # pin screens: pinned screens are left alone when a pack is applied
 $pnlPacks.Controls.Add((New-Heading "Pin screens" 668 354 218))
 $pnlPacks.Controls.Add((New-HelpButton 892 352 "Pin screens" "Pinned screens keep whatever they are showing (a picture or a live video) whenever a pack is applied. This covers every way a pack changes: Apply, Random, Auto-shuffle, the Schedule, the tray menu and hotkeys.`n`nTurn on 'Keep pinned screens as they are', then tick the numbers of the screens to pin. Screens are numbered left to right, the same order packs are laid out.`n`nIf every screen is pinned, nothing changes until you unpin one."))
-$script:chkPinOn = New-NeonCheck "Only change unpinned screens" 668 376 248 28
+$script:chkPinOn = New-NeonCheck "Only Change Unpinned Screens" 668 376 248 28
 $pnlPacks.Controls.Add($script:chkPinOn)
 $script:pnlPins = New-Object System.Windows.Forms.Panel
 $script:pnlPins.Location = New-Object System.Drawing.Point(668, 406)
@@ -9157,7 +9644,7 @@ if ($cmbGrain.Items.Contains($upSaved.UpGrain)) { $cmbGrain.SelectedItem = $upSa
 
 $tt.SetToolTip($btnRandom, "Apply a random pack")
 $tt.SetToolTip($btnNewPack, "Pick your pictures, arrange them across your screens and save them as a pack")
-$tt.SetToolTip($cmbModel, "Which AI model Upscale and Up + slice use. Auto soft picks the gentlest one that's big enough for each image. Anime x4 is stronger and looks more 'redrawn'.")
+$tt.SetToolTip($cmbModel, "Which AI model Upscale and Up + slice use. Auto Soft picks the gentlest one that's big enough for each image. Anime x4 is stronger and looks more 'redrawn'.")
 $tt.SetToolTip($cmbMix, "How much of the AI result to keep. Lower mixes in more of a plain resize of your original, so the AI changes are less visible.")
 $tt.SetToolTip($cmbGrain, "Fine film grain added to slices and upscaled images. It hides plastic smoothness and makes soft images look intentional.")
 $tt.SetToolTip($btnOpenPacks, "Open the WallpaperPacks folder in Explorer")
@@ -9244,23 +9731,23 @@ $pnlAnim.Controls.Add((New-Label "Display numbers are Windows' own (see the Disp
 $pnlAnim.Controls.Add((New-Heading "GPU saver" 450 440 150))
 $script:lblPauseState = New-Label "" 676 442 240 20 $true 9
 $pnlAnim.Controls.Add($script:lblPauseState)
-$pnlAnim.Controls.Add((New-HelpButton 638 438 "GPU saver" ("Live wallpapers keep using your graphics card even while you play a game. The GPU saver freezes them (the last frame stays on the desktop, and they use almost no GPU or CPU) while something else is in front, then thaws them automatically.`n`n" +
-    "- Pause for full-screen apps: games, full-screen video and presentations.`n" +
-    "- Pause for any maximized window: also freezes them whenever a maximized window covers the desktop - the biggest saver.`n" +
+$pnlAnim.Controls.Add((New-HelpButton 604 434 "GPU saver" ("Live wallpapers keep using your graphics card even while you play a game. The GPU saver freezes them (the last frame stays on the desktop, and they use almost no GPU or CPU) while something else is in front, then thaws them automatically.`n`n" +
+    "- Full-Screen Apps: games, full-screen video and presentations.`n" +
+    "- Any Maximized Window: also freezes them whenever a maximized window covers the desktop - the biggest saver.`n" +
     "- Also pause on battery: freezes them whenever a laptop is unplugged.`n`n" +
     "The app has to keep running for this: close it to the tray (bottom-right, near the clock) instead of exiting. If the app is closed or stops, wallpapers are thawed again.")))
 $script:cmbPause = New-StyledCombo 450 460 227
-foreach ($o in @("Off", "Pause for full-screen apps", "Pause for any maximized window")) { [void]$script:cmbPause.Items.Add($o) }
+foreach ($o in @("Off", "Full-Screen Apps", "Any Maximized Window")) { [void]$script:cmbPause.Items.Add($o) }
 $pm = [string](Get-Settings).AutoPause
 $script:cmbPause.SelectedIndex = $(if ($pm -eq 'Maximized') { 2 } elseif ($pm -eq 'Fullscreen') { 1 } else { 0 })
 $pnlAnim.Controls.Add($script:cmbPause)
-$script:chkPauseBat = New-NeonCheck "Also pause on battery" 689 462 227 28
+$script:chkPauseBat = New-NeonCheck "Also Pause On Battery" 689 462 227 28
 $script:chkPauseBat.Checked = ((Get-Settings).PauseBattery -eq '1')
 $pnlAnim.Controls.Add($script:chkPauseBat)
 $tt.SetToolTip($script:cmbPause, "When live wallpapers freeze to save your GPU")
 
 $tt.SetToolTip($lbAnim, "Drag video files here to add them")
-$tt.SetToolTip($cmbMon, "All monitors: the same video on each screen. Span: one video stretched across all screens. Cut to my screens: the video is cut to your real screen sizes and spacing so it lines up across them (needs ffmpeg). Right-click a video to reposition its cut.")
+$tt.SetToolTip($cmbMon, "All Monitors: the same video on each screen. Span: one video stretched across all screens. Cut To My Screens: the video is cut to your real screen sizes and spacing so it lines up across them (needs ffmpeg). Right-click a video to reposition its cut.")
 $tt.SetToolTip($cmbSound, "Wallpaper volume (applies to all Lively wallpapers)")
 $tt.SetToolTip($btnPlay, "Play the selected video (double-click a video does the same)")
 $tt.SetToolTip($btnRandomAnim, "Play a random video from the list")
@@ -9342,6 +9829,7 @@ function Get-SnappedPos([int]$idx, [double]$L, [double]$T) {
 $pnlMap.Add_MouseDown({
     param($s, $e)
     if ($e.Button -ne 'Left') { return }
+    [void]$s.Focus()
     $hit = Get-MapHit $e.X $e.Y
     if ($hit -le 0) { return }
     if ($script:cmbPhysScreen.SelectedIndex -ne ($hit - 1)) { $script:cmbPhysScreen.SelectedIndex = ($hit - 1) }
@@ -9387,14 +9875,47 @@ $pnlMap.Add_MouseUp({
     $script:mapFix = $null
     if ($script:dragMoved) {
         Reset-PhysLayout
-        $snap = Get-SnappedPos $idx $script:posOverride[$idx].L $script:posOverride[$idx].T
-        $script:posOverride[$idx] = @{ L = $snap.L; T = $snap.T }
+        $noSnap = ([string](Get-Settings).NoSnap -eq '1') -or (([System.Windows.Forms.Control]::ModifierKeys -band [System.Windows.Forms.Keys]::Alt) -ne 0)
+        if (-not $noSnap) {
+            $snap = Get-SnappedPos $idx $script:posOverride[$idx].L $script:posOverride[$idx].T
+            $script:posOverride[$idx] = @{ L = $snap.L; T = $snap.T }
+        }
         Set-LayoutDirty $true
         Set-Status "Screens moved. Click Save changes to keep this layout."
     } else {
         $script:posOverride = $script:preOverride
     }
     Reset-PhysLayout
+    $s.Invalidate()
+    Update-Preview
+})
+# arrow keys nudge the picked screen 1 mm (Shift = 10 mm) so a layout can be fine-tuned precisely
+try { $pnlMap.GetType().GetMethod('SetStyle', [Reflection.BindingFlags]'Instance,NonPublic').Invoke($pnlMap, @([System.Windows.Forms.ControlStyles]::Selectable, $true)) } catch { }
+$pnlMap.TabStop = $true
+$pnlMap.Add_PreviewKeyDown({
+    param($s, $e)
+    if (@('Left', 'Right', 'Up', 'Down') -contains [string]$e.KeyCode) { $e.IsInputKey = $true }
+})
+$pnlMap.Add_KeyDown({
+    param($s, $e)
+    $k = [string]$e.KeyCode
+    if (@('Left', 'Right', 'Up', 'Down') -notcontains $k) { return }
+    $e.Handled = $true; $e.SuppressKeyPress = $true
+    if (-not (Test-PhysMatch)) { Set-Status "Turn on 'Match real size when slicing' to position screens."; return }
+    $idx = $script:cmbPhysScreen.SelectedIndex + 1
+    if ($idx -le 0) { return }
+    $lay = Get-PhysicalLayout
+    $ov = @{}
+    foreach ($it in $lay.Items) { $ov[$it.Index] = @{ L = [double]$it.L; T = [double]$it.T } }
+    if (-not $ov.ContainsKey($idx)) { return }
+    $step = 1.0
+    if ($e.Shift) { $step = 10.0 }
+    if ($k -eq 'Left') { $ov[$idx].L -= $step } elseif ($k -eq 'Right') { $ov[$idx].L += $step }
+    elseif ($k -eq 'Up') { $ov[$idx].T -= $step } else { $ov[$idx].T += $step }
+    $script:posOverride = $ov
+    Reset-PhysLayout
+    Set-LayoutDirty $true
+    Set-Status ("Screen {0} moved {1} mm. Click Save changes to keep this layout." -f $idx, $step)
     $s.Invalidate()
     Update-Preview
 })
@@ -9415,7 +9936,7 @@ $script:btnUndoLayout.Add_Click({
 
 # ---- real screen sizes (for seamless slicing)
 $pnlDisp.Controls.Add((New-Heading "Real size" 24 280 300))
-foreach ($lbl in @(@("SCREEN", 24, 200), @("DIAGONAL (IN)", 236, 100), @("BEZEL (MM)", 346, 90))) {
+foreach ($lbl in @(@("Screen", 24, 200), @("Diagonal (In)", 236, 100), @("Bezel (Mm)", 346, 90))) {
     $pnlDisp.Controls.Add((New-Label $lbl[0] $lbl[1] 308 $lbl[2] 16 $true 8))
 }
 $cmbPhysScreen = New-StyledCombo 24 326 200
@@ -9426,7 +9947,7 @@ $numBezel = New-NeonSpin 346 326 90 0 60 1 1
 $script:numDiag = $numDiag; $script:numBezel = $numBezel
 foreach ($c in @($numDiag, $numBezel)) { $pnlDisp.Controls.Add($c) }
 
-$pnlDisp.Controls.Add((New-Label "ALIGN (CLEARS DRAGS)" 24 366 200 16 $true 8))
+$pnlDisp.Controls.Add((New-Label "Alignment" 24 366 200 16 $true 8))
 $cmbAlign = New-StyledCombo 24 384 200
 $script:cmbAlign = $cmbAlign
 foreach ($o in @("Auto", "Center", "Top", "Bottom")) { [void]$cmbAlign.Items.Add($o) }
@@ -9434,14 +9955,20 @@ $cmbAlign.SelectedItem = (Get-Settings).DispAlignMode
 if (-not $cmbAlign.SelectedItem) { $cmbAlign.SelectedItem = "Auto" }
 $pnlDisp.Controls.Add($cmbAlign)
 
-$chkPhys = New-NeonCheck "Match real size when slicing" 236 384 300 28
+$chkPhys = New-NeonCheck "Match Real Size When Slicing" 236 384 300 28
 $script:chkPhys = $chkPhys
 $chkPhys.Checked = (Test-PhysMatch)
 $pnlDisp.Controls.Add($chkPhys)
 
+$chkSnap = New-NeonCheck "Snap Screens To Each Other" 236 410 300 26
+$script:chkSnap = $chkSnap
+$chkSnap.Checked = ([string](Get-Settings).NoSnap -ne '1')
+$chkSnap.Add_CheckedChanged({ Save-Setting 'NoSnap' $(if ($script:chkSnap.Checked) { '' } else { '1' }) })
+$pnlDisp.Controls.Add($chkSnap)
+
 # short hint + a ? for the full explanation
-$pnlDisp.Controls.Add((New-Label "Set each screen's size, then drag screens on the map to match your desk. Slices follow it so pictures line up." 24 428 520 40 $true 9))
-$pnlDisp.Controls.Add((New-HelpButton 552 430 "Screens and real size" ("Screen sizes are read from your monitors when possible. Check them against the label or box and fix any that are off - slices are only as accurate as these numbers.`n`nDiagonal: the size as sold, e.g. 27.`nBezel: the plastic edge on each side of the screen, in millimetres (5-15 is typical). The picture carries on behind it, so lines meet up across screens.`n`nDrag a screen on the map to place it where it really sits: next to the others, above one, or swapped over. Edges snap to their neighbours. When you let go, click Save changes to keep the layout (or Undo).`n`nAlign: how screens of different heights line up when you haven't dragged them. Picking one clears your dragged positions.`n`nMatch real size: on = slices follow your real sizes and bezels. Off = a simple split by pixels.`n`nScreen numbers: packs fill screens left to right; screen 1 is the leftmost one, whatever Windows calls it. For videos, 'Display' numbers are Windows' own.")))
+$pnlDisp.Controls.Add((New-Label "Drag screens to match your desk. Hold Alt to skip snapping. Arrow keys nudge 1 mm." 24 442 520 20 $true 9))
+$pnlDisp.Controls.Add((New-HelpButton 552 440 "Screens and real size" ("Screen sizes are read from your monitors when possible. Check them against the label or box and fix any that are off - slices are only as accurate as these numbers.`n`nDiagonal: the size as sold, e.g. 27.`nBezel: the plastic edge on each side of the screen, in millimetres (5-15 is typical). The picture carries on behind it, so lines meet up across screens.`n`nDrag a screen on the map to place it where it really sits: next to the others, above one, or swapped over. Edges snap to their neighbours. When you let go, click Save changes to keep the layout (or Undo).`n`nAlign: how screens of different heights line up when you haven't dragged them. Picking one clears your dragged positions.`n`nSnapping: hold Alt while dropping a screen to skip it, or untick Snap Screens To Each Other. With a screen selected, the arrow keys nudge it 1 mm (hold Shift for 10 mm).`n`nMatch real size: on = slices follow your real sizes and bezels. Off = a simple split by pixels.`n`nScreen numbers: packs fill screens left to right; screen 1 is the leftmost one, whatever Windows calls it. For videos, 'Display' numbers are Windows' own.")))
 
 $pnlDisp.Controls.Add((New-Heading "Screens" 608 280 308))
 $btnIdentify    = New-Btn "Identify" 608 308 150 'cyan' 40
@@ -9449,11 +9976,11 @@ $btnRefreshDisp = New-Btn "Refresh" 766 308 150 'normal' 40
 $btnWinDisp     = New-Btn "Settings" 608 356 150 'normal' 40
 $btnRefit       = New-Btn "Refit packs" 766 356 150 'normal' 40
 foreach ($b in @($btnIdentify, $btnRefreshDisp, $btnWinDisp, $btnRefit)) { $pnlDisp.Controls.Add($b) }
-$pnlDisp.Controls.Add((New-Label "TURN THE SCREEN PICKED UNDER REAL SIZE" 608 442 262 16 $true 8))
-$pnlDisp.Controls.Add((New-HelpButton 894 432 "Turn a screen" "For a monitor that stands on its side (a vertical monitor). Pick the screen on the map or under Real size, then choose which way it is turned.`n`nThe map flips that screen to portrait, and the Builder and cutter size and cut its piece that way, even next to landscape screens. The piece is rotated back so it looks upright on the real monitor.`n`nTurned right = the top of the screen faces your right. Turned left = faces your left.`n`nIf you already rotated the screen in Windows (Settings > Display > Orientation), leave this on Normal - the map follows Windows on its own. After changing it, use Refit packs for panoramas you already made."))
+$pnlDisp.Controls.Add((New-Label "Screen Rotation" 608 442 120 16 $true 8))
+$pnlDisp.Controls.Add((New-HelpButton 732 438 "Turn a screen" "For a monitor that stands on its side (a vertical monitor). Pick the screen on the map or under Real size, then choose which way it is turned.`n`nThe map flips that screen to portrait, and the Builder and cutter size and cut its piece that way, even next to landscape screens. The piece is rotated back so it looks upright on the real monitor.`n`nTurned right = the top of the screen faces your right. Turned left = faces your left.`n`nIf you already rotated the screen in Windows (Settings > Display > Orientation), leave this on Normal - the map follows Windows on its own. After changing it, use Refit packs for panoramas you already made."))
 $cmbOrient = New-StyledCombo 608 462 220
 $script:cmbOrient = $cmbOrient
-foreach ($o in @("Normal", "Turned right", "Upside down", "Turned left")) { [void]$cmbOrient.Items.Add($o) }
+foreach ($o in @("Normal", "Turned Right", "Upside Down", "Turned Left")) { [void]$cmbOrient.Items.Add($o) }
 $cmbOrient.SelectedIndex = 0
 $pnlDisp.Controls.Add($cmbOrient)
 $btnTurn = New-Btn "Turn" 836 462 80 'cyan' 28
@@ -9463,7 +9990,7 @@ $tt.SetToolTip($btnTurn, "Flip the picked screen on the map and in the cutter")
 $tt.SetToolTip($cmbPhysScreen, "Pick a screen, then set its size")
 $tt.SetToolTip($numDiag, "Screen diagonal in inches (as sold, e.g. 27)")
 $tt.SetToolTip($numBezel, "Plastic edge on each side of the screen, in millimetres. Typical: 5-15")
-$tt.SetToolTip($cmbAlign, "How screens of different heights line up vertically")
+$tt.SetToolTip($cmbAlign, "How screens of different heights line up vertically. Picking one clears your dragged positions.")
 $tt.SetToolTip($chkPhys, "On: slices follow your real screen sizes and bezels so the picture lines up across screens. Off: simple split by pixels.")
 $tt.SetToolTip($btnRefit, "Re-cut your existing panorama packs to match your real screen sizes (originals are kept)")
 $tt.SetToolTip($btnIdentify, "Flash a big number on every screen")
@@ -9510,44 +10037,46 @@ $pnlBuild.Controls.Add((New-HelpButton 892 251 "Builder help" ("The Builder lays
 
 $btnBtPic   = New-Btn "Picture..." 24 278 130 'normal' 32
 $btnBtVid   = New-Btn "Video..." 162 278 130 'normal' 32
-$btnBtPos   = New-Btn "Position..." 300 278 130 'normal' 32
-$btnBtClear = New-Btn "Clear" 438 278 130 'normal' 32
-$script:btnBtPos = $btnBtPos; $script:btnBtClear = $btnBtClear
-$btnBtLock  = New-Btn "Lock screen" 576 278 140 'cyan' 32
-foreach ($b in @($btnBtPic, $btnBtVid, $btnBtPos, $btnBtClear, $btnBtLock)) { $pnlBuild.Controls.Add($b) }
+$btnBtClear = New-Btn "Clear" 300 278 130 'normal' 32
+$script:btnBtClear = $btnBtClear
+$btnBtLock  = New-Btn "Lock screen" 438 278 130 'cyan' 32
+$btnBtSaver = New-Btn "Screen saver" 576 278 140 'cyan' 32
+$tt.SetToolTip($btnBtSaver, "Open the screen saver settings")
+foreach ($b in @($btnBtPic, $btnBtVid, $btnBtClear, $btnBtLock, $btnBtSaver)) { $pnlBuild.Controls.Add($b) }
 $tt.SetToolTip($btnBtLock, "Choose the Windows lock screen picture for the selected pack")
 $script:chkBtUp = New-NeonCheck "Upscale (AI)" 24 351 128 28
-$script:chkBtUpAll = New-NeonCheck "Upscale all" 156 351 108 28
+$script:chkBtUpAll = New-NeonCheck "Upscale All" 156 351 108 28
 $pnlBuild.Controls.Add($script:chkBtUp)
 $pnlBuild.Controls.Add($script:chkBtUpAll)
 
 # video options (own row)
-$pnlBuild.Controls.Add((New-Label "Video" 24 393 44 22 $true 9))
-$script:btnBtRotL = New-Btn "Turn left" 72 387 86 'normal' 28
-$script:btnBtRotR = New-Btn "Turn right" 164 387 92 'normal' 28
+$pnlBuild.Controls.Add((New-Heading "Selected media" 24 380 300))
+$pnlBuild.Controls.Add((New-Heading "Video settings" 358 380 300))
+$script:btnBtRotR = New-Btn "Rotate R" 130 402 100 'normal' 28
+$script:btnBtRotL = New-Btn "Rotate L" 24 402 100 'normal' 28
 $script:btnBtRotL.Font = Get-RetroFont 8; $script:btnBtRotR.Font = Get-RetroFont 8
 $pnlBuild.Controls.Add($script:btnBtRotL); $pnlBuild.Controls.Add($script:btnBtRotR)
-$script:lblBtRot = New-Label "" 262 393 92 22 $true 9
+$script:lblBtRot = New-Label "" 238 407 110 22 $true 9
 $pnlBuild.Controls.Add($script:lblBtRot)
-$pnlBuild.Controls.Add((New-Label "Start (s)" 358 393 54 22 $true 9))
-$script:numBtT0 = New-NeonSpin 414 388 66 0 86400 1 1
+$pnlBuild.Controls.Add((New-Label "Start (s)" 358 407 54 22 $true 9))
+$script:numBtT0 = New-NeonSpin 414 402 66 0 86400 1 1
 $pnlBuild.Controls.Add($script:numBtT0)
-$pnlBuild.Controls.Add((New-Label "End (s)" 488 393 44 22 $true 9))
-$script:numBtT1 = New-NeonSpin 534 388 66 0 86400 1 1
+$pnlBuild.Controls.Add((New-Label "End (s)" 488 407 44 22 $true 9))
+$script:numBtT1 = New-NeonSpin 534 402 66 0 86400 1 1
 $pnlBuild.Controls.Add($script:numBtT1)
-$script:chkBtBlend = New-NeonCheck "Blend empty screens" 24 315 200 28
+$script:chkBtBlend = New-NeonCheck "Blend Empty Screens" 24 315 200 28
 $pnlBuild.Controls.Add($script:chkBtBlend)
 $pnlBuild.Controls.Add((New-Label "Click the + between screens to link them into one panorama. Right-click a screen for more." 236 320 640 22 $true 9))
-$pnlBuild.Controls.Add((New-HelpButton 892 389 "Video options" ("Turn left / Turn right: spin the selected video in 90 degree steps. It is turned while the video is cut, in the same pass, so there is no extra quality loss.`n`n" +
+$pnlBuild.Controls.Add((New-HelpButton 892 380 "Selected media and video settings" ("Rotate R / Rotate L: spin the selected picture or video in 90 degree steps. A video is turned while it is cut, in the same pass, so there is no extra quality loss.`n`n" +
     "Start / End: play only part of the video (seconds). End 0 means to the end. The part loops in Lively.`n`n" +
     "Video quality: Fast makes smaller files quickly, Balanced is the default, Max keeps the most detail but takes the longest and makes bigger files.")))
 $script:btnBtRotL.Add_Click({
     $sl = (Get-BtTarget $script:btSel).Slot
-    if ($sl -and $sl.type -eq 'video') { $sl.rot = (([int]$sl.rot - 90) + 360) % 360; $script:btDirty = $true; Update-BtInfo } else { Set-Status "Select a video first." }
+    if ($sl -and $sl.type -ne 'none') { $sl.rot = (([int]$sl.rot - 90) + 360) % 360; $script:btDirty = $true; Update-BtInfo } else { Set-Status "Pick a picture or video first." }
 })
 $script:btnBtRotR.Add_Click({
     $sl = (Get-BtTarget $script:btSel).Slot
-    if ($sl -and $sl.type -eq 'video') { $sl.rot = ([int]$sl.rot + 90) % 360; $script:btDirty = $true; Update-BtInfo } else { Set-Status "Select a video first." }
+    if ($sl -and $sl.type -ne 'none') { $sl.rot = ([int]$sl.rot + 90) % 360; $script:btDirty = $true; Update-BtInfo } else { Set-Status "Pick a picture or video first." }
 })
 $script:numBtT0.Add_ValueChanged({
     if ($script:loadingBt) { return }
@@ -9576,7 +10105,7 @@ $script:btHistTimer.Interval = 300
 $script:btHistTimer.Add_Tick({ try { Update-BtHistory } catch { } })
 $script:btHistTimer.Start()
 
-$pnlBuild.Controls.Add((New-Label "Pack name" 24 446 74 22 $true 9))
+$pnlBuild.Controls.Add((New-Label "Pack Name" 24 446 74 22 $true 9))
 $script:txtBtName = New-Object System.Windows.Forms.TextBox
 $script:txtBtName.Location = New-Object System.Drawing.Point(102, 442)
 $script:txtBtName.Size = New-Object System.Drawing.Size(200, 26)
@@ -9589,7 +10118,7 @@ $btnBtSave = New-Btn "Save pack" 312 440 120 'primary' 32
 $btnBtLoad = New-Btn "Load pack" 440 440 120 'normal' 32
 $btnBtNew  = New-Btn "New" 568 440 84 'normal' 32
 foreach ($b in @($btnBtSave, $btnBtLoad, $btnBtNew)) { $pnlBuild.Controls.Add($b) }
-$script:chkBtApply = New-NeonCheck "Apply after saving" 668 442 200 28
+$script:chkBtApply = New-NeonCheck "Apply After Saving" 668 442 200 28
 $pnlBuild.Controls.Add($script:chkBtApply)
 
 # upscale settings (used by Upscale (AI) here and by Upscale / Up + slice on the Packs tab)
@@ -9597,7 +10126,7 @@ $pnlBuild.Controls.Add((New-Label "Model" 276 356 46 22 $true 9))
 $cmbModel.Location = New-Object System.Drawing.Point(324, 352)
 $cmbModel.Width = 130
 $pnlBuild.Controls.Add($cmbModel)
-$pnlBuild.Controls.Add((New-Label "AI amount" 466 356 68 22 $true 9))
+$pnlBuild.Controls.Add((New-Label "AI Amount" 466 356 68 22 $true 9))
 $cmbMix.Location = New-Object System.Drawing.Point(536, 352)
 $cmbMix.Width = 84
 $pnlBuild.Controls.Add($cmbMix)
@@ -9605,8 +10134,8 @@ $pnlBuild.Controls.Add((New-Label "Grain" 632 356 40 22 $true 9))
 $cmbGrain.Location = New-Object System.Drawing.Point(674, 352)
 $cmbGrain.Width = 84
 $pnlBuild.Controls.Add($cmbGrain)
-$pnlBuild.Controls.Add((New-Label "Quality" 612 393 48 22 $true 9))
-$script:cmbVidQ = New-StyledCombo 662 388 120
+$pnlBuild.Controls.Add((New-Label "Quality" 612 407 48 22 $true 9))
+$script:cmbVidQ = New-StyledCombo 662 402 120
 foreach ($o in @("Fast", "Balanced", "Max")) { [void]$script:cmbVidQ.Items.Add($o) }
 $vq = [string](Get-Settings).VideoQuality
 if ($script:cmbVidQ.Items.Contains($vq)) { $script:cmbVidQ.SelectedItem = $vq } else { $script:cmbVidQ.SelectedItem = "Balanced" }
@@ -9679,24 +10208,24 @@ $pnlLock.BackColor = $script:cBg
 $pnlLock.Visible = $false
 $pnlBuild.Controls.Add($pnlLock)
 
-$script:lblLockPack = New-Label "" 24 0 840 30 $false 13
-$script:lblLockPack.Font = Get-RetroFont 13 'Bold, Italic'
+$pnlLock.Controls.Add((New-Heading "Lock screen" 24 16 400))
+$script:lblLockPack = New-Label "" 24 40 420 22 $true 10
 $pnlLock.Controls.Add($script:lblLockPack)
-$pnlLock.Controls.Add((New-HelpButton 892 4 "Lock screen" ("The Windows lock screen (what you see at boot and after Win+L) shows one picture, and only on your main screen. This page decides what that picture is for the pack selected on the Packs tab.`n`n" +
-    "- Windows default (none): no custom lock screen for this pack. This is the default.`n- Pack thumbnail: the same picture as the pack's card on the Packs tab (a slice of every screen, or the center screen for a panorama).`n" +
-    "- All screens as shown: every screen's picture side by side, so you see everything that is on your desktop.`n" +
-    "- My own picture: any picture you choose, just for this pack.`n- Pack panorama: if the pack was built from one wide picture in the Builder, that picture is used, shown with one screen-shaped frame. Drag the frame to choose which part becomes the lock screen, drag a corner square (or scroll) to resize it.`n`n" +
-    "The lock screen follows your packs: whenever a pack is applied (Apply, Random, shuffle, Schedule), its lock screen is set too. A pack with 'Windows default (none)' puts Windows' own lock screen back. 'Set lock screen now' sends it to Windows right away.`n`n" +
+$pnlLock.Controls.Add((New-HelpButton 440 14 "Lock screen" ("The Windows lock screen (what you see at boot and after Win+L) shows one picture, and only on your main screen. This page decides what that picture is for the pack selected on the Packs tab.`n`n" +
+    "- Windows Default: no custom lock screen for this pack. This is the default.`n- Pack Thumbnail: the same picture as the pack's card on the Packs tab (a slice of every screen, or the center screen for a panorama).`n" +
+    "- All Screens: every screen's picture side by side, so you see everything that is on your desktop.`n" +
+    "- My Own Picture: any picture you choose, just for this pack.`n- One Screen: the picture from just one screen of the pack, chosen in the box beside it.`n- Random Picture: a different picture from the pack each time the lock screen is set.`n- Panorama: if the pack was built from one wide picture in the Builder, that picture is used, shown with one screen-shaped frame. Drag the frame to choose which part becomes the lock screen, drag a corner square (or scroll) to resize it.`n`n" +
+    "The lock screen follows your packs: whenever a pack is applied (Apply, Random, shuffle, Schedule), its lock screen is set too. A pack with 'Windows Default' puts Windows' own lock screen back. 'Set Lock Screen Now' sends it to Windows right away.`n`n" +
     "If nothing changes, open Settings > Personalization > Lock screen and set it to 'Picture' (not Windows Spotlight).")))
-$pnlLock.Controls.Add((New-Label "Show on the lock screen" 24 40 300 22 $true 9))
-$script:cmbLockMode = New-StyledCombo 24 62 340
-foreach ($o in @("Windows default (none)", "Pack thumbnail", "All screens as shown", "One screen from the pack", "Random pack picture each lock", "My own picture", "Pack panorama (slide the screens)")) { [void]$script:cmbLockMode.Items.Add($o) }
+$pnlLock.Controls.Add((New-Heading "Shows" 24 82 400))
+$script:cmbLockMode = New-StyledCombo 24 110 340
+foreach ($o in @("Windows Default", "Pack Thumbnail", "All Screens", "One Screen", "Random Picture", "My Own Picture", "Panorama")) { [void]$script:cmbLockMode.Items.Add($o) }
 $script:cmbLockMode.SelectedIndex = 0
 $pnlLock.Controls.Add($script:cmbLockMode)
 
 $script:pnlLockPrev = New-Object System.Windows.Forms.Panel
-$script:pnlLockPrev.Location = New-Object System.Drawing.Point(24, 104)
-$script:pnlLockPrev.Size = New-Object System.Drawing.Size(512, 288)
+$script:pnlLockPrev.Location = New-Object System.Drawing.Point(488, 46)
+$script:pnlLockPrev.Size = New-Object System.Drawing.Size(448, 252)
 Set-DoubleBuffered $script:pnlLockPrev
 $script:lockEdit = $null
 $script:lockDrag = $null
@@ -9808,41 +10337,42 @@ $script:pnlLockPrev.Add_MouseWheel({
     Save-LockPanel
 })
 $script:pnlLockPrev.Add_MouseEnter({ param($s, $e) try { if ($script:lockEdit) { [void]$s.Focus() } } catch { } })
+$pnlLock.Controls.Add((New-Heading "Preview" 488 16 448))
 $pnlLock.Controls.Add($script:pnlLockPrev)
 
-$script:lblLockNote = New-Label "" 568 62 348 84 $true 9
+$script:lblLockNote = New-Label "" 24 150 440 62 $true 9
 $pnlLock.Controls.Add($script:lblLockNote)
-$pnlLock.Controls.Add((New-Label "Screen" 568 154 56 22 $true 9))
-$script:cmbLockScreen = New-StyledCombo 626 150 100
+$pnlLock.Controls.Add((New-Heading "Options" 24 214 400))
+$pnlLock.Controls.Add((New-Label "Screen" 24 250 56 22 $true 9))
+$script:cmbLockScreen = New-StyledCombo 84 246 100
 $pnlLock.Controls.Add($script:cmbLockScreen)
-$script:chkLockPano = New-NeonCheck "Cut one screen from a panorama picture" 568 184 348 28
-$pnlLock.Controls.Add($script:chkLockPano)
-$script:btnLockPic = New-Btn "Choose picture..." 568 220 190 'normal' 32
+$script:chkLockPano = New-NeonCheck "Cut One Screen From a Panorama Picture" 24 284 440 28
+$script:btnLockPic = New-Btn "Choose Picture..." 24 284 190 'normal' 32
 $pnlLock.Controls.Add($script:btnLockPic)
-$script:btnLockNow = New-Btn "Set lock screen now" 568 266 220 'primary' 36
+$script:btnLockNow = New-Btn "SAVE" 24 332 220 'primary' 36
 $pnlLock.Controls.Add($script:btnLockNow)
-$script:btnLockSpot = New-Btn "Use Windows Spotlight..." 568 312 220 'normal' 32
+$script:btnLockSpot = New-Btn "Use Windows Spotlight..." 24 378 220 'normal' 32
 $pnlLock.Controls.Add($script:btnLockSpot)
-$script:btnLockBack = New-Btn "Back to layout" 24 404 170 'normal' 32
+$script:btnLockBack = New-Btn "Close" 488 396 120 'normal' 32
 $pnlLock.Controls.Add($script:btnLockBack)
 
 $script:lockModes = @('none', 'thumb', 'screens', 'screen', 'cycle', 'custom', 'pano')
 function Update-LockPanel {
-    $name = [string]$script:lbPacks.SelectedItem
+    $name = [string]$script:btPack
     $script:lockBusy = $true
     try {
         if (-not $name) {
-            $script:lblLockPack.Text = "No pack selected"
-            $script:lblLockNote.Text = "Pick a pack on the Packs tab first."
+            $script:lblLockPack.Text = ""
+            $script:lblLockNote.Text = "Save this pack in the Builder first (or load one), then set its lock screen here."
             if ($script:lockBmp) { $script:lockBmp.Dispose(); $script:lockBmp = $null }
             $script:pnlLockPrev.Invalidate()
             return
         }
         $dir = Join-Path $Root $name
         $cfg = Get-LockCfg $dir
-        $script:lblLockPack.Text = "Lock screen: $name"
+        $script:lblLockPack.Text = $name
         $script:cmbLockMode.SelectedIndex = [math]::Max(0, [array]::IndexOf($script:lockModes, [string]$cfg.mode))
-        $script:chkLockPano.Checked = [bool]$cfg.pano
+        $script:chkLockPano.Checked = $false
         $nScr = [math]::Max(1, @(Get-DisplayList).Count)
         $script:cmbLockScreen.Items.Clear()
         for ($i = 1; $i -le $nScr; $i++) { [void]$script:cmbLockScreen.Items.Add([string]$i) }
@@ -9904,7 +10434,7 @@ function Update-LockPanel {
 
 function Save-LockPanel {
     if ($script:lockBusy) { return }
-    $name = [string]$script:lbPacks.SelectedItem
+    $name = [string]$script:btPack
     if (-not $name) { return }
     $dir = Join-Path $Root $name
     $cfg = Get-LockCfg $dir
@@ -9916,7 +10446,7 @@ function Save-LockPanel {
 }
 
 function Select-LockPicture {
-    $name = [string]$script:lbPacks.SelectedItem
+    $name = [string]$script:btPack
     if (-not $name) { return }
     $dlg = New-Object System.Windows.Forms.OpenFileDialog
     $dlg.Title = "Pick a lock screen picture"
@@ -9936,18 +10466,52 @@ function Select-LockPicture {
     } catch { Set-Status "Couldn't use that picture: $($_.Exception.Message)" }
 }
 
+$script:lockForm = $null
 function Show-LockPanel([bool]$on) {
-    $script:lockShown = $on
-    $script:pnlLock.Visible = $on
-    if ($on) { $script:pnlLock.BringToFront(); Update-LockPanel }
+    if (-not $on) {
+        if ($script:lockForm) { try { $script:lockForm.Close() } catch { } }
+        return
+    }
+    if ($script:lockForm) { return }
+    $f = New-Object System.Windows.Forms.Form
+    $f.Text = "Lock Screen"
+    $f.StartPosition = 'CenterParent'
+    $f.FormBorderStyle = 'FixedDialog'
+    $f.MaximizeBox = $false; $f.MinimizeBox = $false; $f.ShowInTaskbar = $false
+    $f.BackColor = $script:cBg; $f.ForeColor = $script:cText
+    $f.Font = New-Object System.Drawing.Font("Segoe UI", 10)
+    if ($script:appIcon) { $f.Icon = $script:appIcon }
+    $f.Add_HandleCreated({ param($s, $e) Set-TitleBar $s.Handle })
+    $f.ClientSize = New-Object System.Drawing.Size(960, 440)
+    $script:lockForm = $f
+    $script:pnlBuild.Controls.Remove($script:pnlLock)
+    $script:pnlLock.Dock = 'Fill'
+    $script:pnlLock.Visible = $true
+    $f.Controls.Add($script:pnlLock)
+    $script:lockShown = $true
+    Update-LockPanel
+    try { [void]$f.ShowDialog($script:form) }
+    finally {
+        $script:lockShown = $false
+        $f.Controls.Remove($script:pnlLock)
+        $script:pnlLock.Dock = 'None'
+        $script:pnlLock.Visible = $false
+        $script:pnlBuild.Controls.Add($script:pnlLock)
+        $script:lockForm = $null
+        $f.Dispose()
+    }
 }
 
-$btnBtLock.Add_Click({ Show-LockPanel $true })
+$btnBtLock.Add_Click({
+    if (-not $script:btPack) { Set-Status "Save this pack first (give it a name and press Save), then set its lock screen."; return }
+    Show-LockPanel $true
+})
+$btnBtSaver.Add_Click({ Show-SaverDialog })
 $script:btnLockBack.Add_Click({ Show-LockPanel $false })
 $script:cmbLockMode.Add_SelectedIndexChanged({
     if ($script:lockBusy) { return }
     Save-LockPanel
-    $nm = [string]$script:lbPacks.SelectedItem
+    $nm = [string]$script:btPack
     $needPic = $false
     if ($nm -and $script:lockModes[$script:cmbLockMode.SelectedIndex] -eq 'custom') { if (-not (Get-LockCfg (Join-Path $Root $nm)).file) { $needPic = $true } }
     Update-LockPanel
@@ -9955,7 +10519,7 @@ $script:cmbLockMode.Add_SelectedIndexChanged({
 })
 $script:chkLockPano.Add_CheckedChanged({
     if ($script:lockBusy) { return }
-    $nm = [string]$script:lbPacks.SelectedItem
+    $nm = [string]$script:btPack
     if (-not $nm) { return }
     if ($script:chkLockPano.Checked -and $script:lockModes[$script:cmbLockMode.SelectedIndex] -ne 'custom') {
         $script:lockBusy = $true; $script:cmbLockMode.SelectedIndex = [array]::IndexOf($script:lockModes, 'custom'); $script:lockBusy = $false
@@ -9968,11 +10532,13 @@ $script:chkLockPano.Add_CheckedChanged({
 $script:cmbLockScreen.Add_SelectedIndexChanged({ if ($script:lockBusy) { return }; Save-LockPanel; Update-LockPanel })
 $script:btnLockPic.Add_Click({ Select-LockPicture })
 $script:btnLockNow.Add_Click({
-    $nm = [string]$script:lbPacks.SelectedItem
-    if (-not $nm) { Set-Status "Pick a pack on the Packs tab first."; return }
-    if (Apply-PackLockScreen $nm) { Set-Status "Lock screen set from '$nm'. Press Win+L to see it. (If it doesn't change, set Personalization > Lock screen to 'Picture'.)" }
+    $nm = [string]$script:btPack
+    if (-not $nm) { Set-Status "Save or load a pack in the Builder first."; return }
+    Save-LockPanel
+    Set-Status "Lock screen saved for '$nm'. It is used when this pack is applied."
+    Show-LockPanel $false
 })
-$tt.SetToolTip($script:btnLockNow, "Send this picture to Windows as your lock screen")
+$tt.SetToolTip($script:btnLockNow, "Save this pack's lock screen options. They take effect when the pack is applied")
 $script:btnLockSpot.Add_Click({
     try {
         $k = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'
@@ -10038,14 +10604,14 @@ function Update-MonitorLists {
         $keep = [string]$script:cmbMon.SelectedItem
         if (-not $keep) { $keep = (Get-Settings).AnimTarget }
         $script:cmbMon.Items.Clear()
-        [void]$script:cmbMon.Items.Add("All monitors")
-        [void]$script:cmbMon.Items.Add("Span across monitors")
-        [void]$script:cmbMon.Items.Add("Cut to my screens")
+        [void]$script:cmbMon.Items.Add("All Monitors")
+        [void]$script:cmbMon.Items.Add("Span Across Monitors")
+        [void]$script:cmbMon.Items.Add("Cut To My Screens")
         foreach ($d in (Get-DisplayList)) {
             $num = $d.WinNum
             if ($num -le 0) { $num = $d.Index }
             $label = "Display $num - $($d.W)x$($d.H)"
-            if ($d.Primary) { $label += " (main)" }
+            if ($d.Primary) { $label += " (Main)" }
             [void]$script:cmbMon.Items.Add($label)
         }
         if ($script:cmbMon.Items.Contains($keep)) { $script:cmbMon.SelectedItem = $keep } else { $script:cmbMon.SelectedIndex = 0 }
@@ -10120,8 +10686,13 @@ function Update-Preview {
     if ($script:lockShown -and $script:activeTab -eq 3) { Update-LockPanel }
     $name = $script:lbPacks.SelectedItem
     if (-not $name) {
-        $script:lblPackName.Text = "No packs yet"
-        $script:lblInfo.Text = "Use New pack to make your first one."
+        if ($script:lbPacks.Items.Count -gt 0) {
+            $script:lblPackName.Text = "No pack selected"
+            $script:lblInfo.Text = "Click a pack to see it here."
+        } else {
+            $script:lblPackName.Text = "No packs yet"
+            $script:lblInfo.Text = "Use New pack to make your first one."
+        }
         return
     }
     $imgs = @(Get-PackImages (Join-Path $Root $name))
@@ -10267,17 +10838,7 @@ function Switch-Tab([int]$i) {
     if ($script:lockShown) { Show-LockPanel $false }
     if ($i -eq 3) {
         Sync-Bt
-        $sel = [string]$script:lbPacks.SelectedItem
-        if (-not $script:btSkipLoad -and $sel -and $sel -ne $script:btPack -and (Test-Path -LiteralPath (Join-Path (Join-Path $Root $sel) "pack.json"))) {
-            $doLoad = $true
-            if ($script:btDirty) {
-                $a2 = [System.Windows.Forms.MessageBox]::Show("The Builder has unsaved changes.`n`nLoad '$sel' (the pack selected on the Packs tab) instead and lose them?", "Builder", 'YesNo', 'Question')
-                if ($a2 -ne 'Yes') { $doLoad = $false }
-            }
-            if ($doLoad) { Load-BtFromPack $sel }
-        } elseif (-not $script:btDirty -and -not $script:btPack -and $sel -and -not [string]$script:txtBtName.Text) {
-            $script:txtBtName.Text = $sel
-        }
+        # the Builder always starts blank; use Load pack to bring a pack in
         Update-BtInfo
     }
     if ($i -eq 2) { Update-Displays $false; $script:pnlMap.Invalidate() }
@@ -10319,7 +10880,7 @@ $lbAnim.Add_DoubleClick({
 $lbAnim.Add_KeyDown({ param($s, $e) if ($e.KeyCode -eq 'Delete') { Remove-SelectedAnim } })
 $ctxAnim = New-NeonMenu
 [void]$ctxAnim.Items.Add("Play", $null, { if ($script:lbAnim.SelectedItem) { Start-Animated (Join-Path $AnimRoot $script:lbAnim.SelectedItem) (Get-AnimTarget) } })
-[void]$ctxAnim.Items.Add("Cut to my screens...", $null, { if ($script:lbAnim.SelectedItem) { [void](Invoke-VideoCut (Join-Path $AnimRoot $script:lbAnim.SelectedItem) $true) } })
+[void]$ctxAnim.Items.Add("Cut To My Screens...", $null, { if ($script:lbAnim.SelectedItem) { [void](Invoke-VideoCut (Join-Path $AnimRoot $script:lbAnim.SelectedItem) $true) } })
 [void]$ctxAnim.Items.Add("-")
 [void]$ctxAnim.Items.Add("Remove", $null, { Remove-SelectedAnim })
 $ctxAnim.Add_Opening({ param($s, $e) if (-not $script:lbAnim.SelectedItem) { $e.Cancel = $true } })
@@ -10499,7 +11060,6 @@ $pnlBtSrc.Add_DragDrop({
 $script:ctxBt = New-NeonMenu
 [void]$script:ctxBt.Items.Add("Picture...", $null, { $script:btnBtPicRef.PerformClick() })
 [void]$script:ctxBt.Items.Add("Video...", $null, { $script:btnBtVidRef.PerformClick() })
-[void]$script:ctxBt.Items.Add("Position...", $null, { Invoke-BtPosition })
 [void]$script:ctxBt.Items.Add("Clear", $null, { $script:btnBtClear.PerformClick() })
 [void]$script:ctxBt.Items.Add("-")
 [void]$script:ctxBt.Items.Add("Link all screens (one panorama)", $null, { Invoke-BtLayout "One panorama across all" })
@@ -10521,7 +11081,6 @@ $btnBtVid.Add_Click({
     if (Test-Path -LiteralPath $AnimRoot) { $dlg.InitialDirectory = $AnimRoot }
     if ($dlg.ShowDialog() -eq 'OK') { Add-BtFiles ([string[]]@($dlg.FileName)) $script:btSel }
 })
-$btnBtPos.Add_Click({ Invoke-BtPosition })
 $btnBtClear.Add_Click({
     $t = Get-BtTarget $script:btSel
     if ($t.IsOver) { $t.Parent.over.Remove([int]$script:btSel) }
@@ -10617,7 +11176,7 @@ $form.Controls.Add($pnlSched)
 $pnlSched.AutoScroll = $true
 $pnlSched.Controls.Add((New-Heading "Pack schedule" 490 0 300))
 $pnlSched.Controls.Add((New-HelpButton 892 -2 "Schedule" ("Play different packs at different times of day.`n`nEach block runs from its start hour until the next block starts (hours are 0-23 on your clock, so 22 is 10 pm). The pack is applied when a block begins, and once when the app starts. Choose (keep current) for a block that should change nothing.`n`nThe app has to be running, so close it to the tray instead of exiting. Auto-shuffle on the Packs tab still works too, and simply changes the pack until the next block starts.")))
-$script:chkSchedOn = New-NeonCheck "Use the schedule" 490 22 190 28
+$script:chkSchedOn = New-NeonCheck "Use The Schedule" 490 22 190 28
 $pnlSched.Controls.Add($script:chkSchedOn)
 $pnlSched.Controls.Add((New-Label "Each block runs until the next one starts." 690 27 226 22 $true 8))
 
@@ -10646,14 +11205,14 @@ $btnSchedNow = New-Btn "Apply now" 490 186 130 'primary' 30
 $pnlSched.Controls.Add($btnSchedNow)
 
 $pnlSched.Controls.Add((New-Heading "Startup" 490 222 300))
-$script:chkHot = New-NeonCheck "Global hotkeys (work from the tray)" 490 244 420 28
+$script:chkHot = New-NeonCheck "Global Hotkeys (Work From The Tray)" 490 244 420 28
 $script:chkHot.Checked = ([string](Get-Settings).Hotkeys -eq '1')
 $pnlSched.Controls.Add($script:chkHot)
 $pnlSched.Controls.Add((New-Label "Ctrl+Alt+Right/Left = next/previous pack, P = pause, R = random" 490 270 426 20 $true 8))
-$script:chkStartWin = New-NeonCheck "Start with Windows (hidden in the tray)" 490 290 420 28
+$script:chkStartWin = New-NeonCheck "Start With Windows (Hidden In The Tray)" 490 290 420 28
 $script:chkStartWin.Checked = (Test-StartWithWindows)
 $pnlSched.Controls.Add($script:chkStartWin)
-$script:chkLoadScr = New-NeonCheck "Show the loading screen" 490 316 420 28
+$script:chkLoadScr = New-NeonCheck "Show The Loading Screen" 490 316 420 28
 $script:chkLoadScr.Checked = ([string](Get-Settings).NoSplash -ne '1')
 $pnlSched.Controls.Add($script:chkLoadScr)
 $script:chkLoadScr.Add_CheckedChanged({
@@ -10662,8 +11221,8 @@ $script:chkLoadScr.Add_CheckedChanged({
     Set-Status $(if ($script:chkLoadScr.Checked) { "The loading screen will show at startup." } else { "The loading screen is off. The window appears when the app is ready." })
 })
 
-$script:chkPauseHdr = New-NeonCheck "Pause header animation" 490 344 215 28
-$script:chkPauseFtr = New-NeonCheck "Pause footer animation" 708 344 215 28
+$script:chkPauseHdr = New-NeonCheck "Pause Header Animation" 490 344 215 28
+$script:chkPauseFtr = New-NeonCheck "Pause Footer Animation" 708 344 215 28
 $script:chkPauseHdr.Checked = ([string](Get-Settings).PauseHdr -eq '1')
 $script:chkPauseFtr.Checked = ([string](Get-Settings).PauseFtr -eq '1')
 $pnlSched.Controls.Add($script:chkPauseHdr); $pnlSched.Controls.Add($script:chkPauseFtr)
@@ -10692,9 +11251,9 @@ function Update-SchedPacks {
         for ($i = 0; $i -lt 4; $i++) {
             $cb = $script:cmbSchedP[$i]
             $want = [string]$s["SchedP$($i + 1)"]
-            if (-not $want) { $want = '(keep current)' }
+            if (-not $want) { $want = '(Keep Current)' }
             $cb.Items.Clear()
-            [void]$cb.Items.Add('(keep current)')
+            [void]$cb.Items.Add('(Keep Current)')
             foreach ($pk in $script:lbPacks.Items) { [void]$cb.Items.Add([string]$pk) }
             if ($cb.Items.Contains($want)) { $cb.SelectedItem = $want } else { $cb.SelectedIndex = 0 }
         }
@@ -10796,6 +11355,13 @@ Update-PhysScreenList
 Update-DisplayText
 Update-PackList $null
 try { Remove-Setting 'PackGrid' } catch { }
+# start with nothing selected; a pack already in use still shows on the Displays preview
+try {
+    $lp = [string](Get-Settings).LastPack
+    if ($lp -and (Test-Path -LiteralPath (Join-Path $Root $lp))) { $script:currentPack = $lp }
+} catch { }
+if ($script:currentPack -and $script:lbPacks.Items.Contains([string]$script:currentPack)) { $script:lbPacks.SelectedItem = [string]$script:currentPack } else { $script:lbPacks.SelectedIndex = -1 }
+Update-Preview
 # ---- "Shuffle from" picker (favorites and tags, any combination)
 function Update-ShuffleButton {
     $src = @(Get-ShuffleSources)

@@ -48,12 +48,12 @@ abstract class ThemeEffect
         Frame(g, t, dt);
     }
 
-    static void LoadPalette(ThemeEffect e, string dir, out string style)
+    static void LoadPalette(ThemeEffect e, string dir, string file, out string style)
     {
         style = "";
         try
         {
-            string f = Path.Combine(dir, "splash-theme.txt");
+            string f = Path.Combine(dir, file);
             if (!File.Exists(f)) return;
             foreach (string line in File.ReadAllLines(f))
             {
@@ -71,11 +71,12 @@ abstract class ThemeEffect
     }
 
     // null = this theme has no animation of its own (the Wallpaper theme): use the wallpaper packs instead
-    public static ThemeEffect Create(string dir, Size size)
+    public static ThemeEffect Create(string dir, Size size) { return Create(dir, size, "splash-theme.txt"); }
+    public static ThemeEffect Create(string dir, Size size, string file)
     {
         ThemeEffect probe = new Starfield();
         string style;
-        LoadPalette(probe, dir, out style);
+        LoadPalette(probe, dir, file, out style);
         ThemeEffect e;
         switch (style)
         {
@@ -113,12 +114,7 @@ class Starfield : ThemeEffect
     protected override void Frame(Graphics g, double t, double dt)
     {
         Back(g, Pc("bgTop", 20, 14, 60), Pc("bgBottom", 4, 3, 16));
-        Color a = Pc("accent", 146, 112, 255), c = Pc("cyan", 80, 222, 255), p = Pc("purple", 255, 112, 206);
-        for (int k = 0; k < 3; k++)
-        {
-            float nx = (float)(W * (0.25 + 0.25 * k) + Math.Sin(t * 0.05 + k * 2) * W * 0.1), ny = (float)(H * (0.35 + 0.15 * k) + Math.Cos(t * 0.04 + k) * H * 0.1);
-            Ell(g, Al(k == 0 ? a : (k == 1 ? p : c), 14), nx - W * 0.28f, ny - H * 0.28f, W * 0.56f, H * 0.56f);
-        }
+        Color c = Pc("cyan", 80, 222, 255), p = Pc("purple", 255, 112, 206);
         float f = W * 0.5f, cx = W / 2f, cy = H / 2f, speed = 0.32f;
         for (int i = 0; i < N; i++)
         {
